@@ -1,0 +1,714 @@
+# Copyright (c) 2026 Amazon Web Services
+# Licensed under the MIT-0 License
+# See LICENSE file in the project root for full license information.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  AHA EventBridge Lambda - Routes AWS Health events from EventBridge to
+  AgentCore Runtime (issue/investigation) or SNS (scheduledChange/accountNotification).
+  Includes human-approval remediation flow with DynamoDB, API Gateway, and SES.
+
+Parameters:
+  AgentContainerUri:
+    Type: String
+    Description: ECR container image URI for the AgentCore Runtime (e.g., 123456789012.dkr.ecr.eu-west-1.amazonaws.com/phd-notification-classifier:latest)
+
+  SesIdentityArn:
+    Type: String
+    Description: Verified SES sender email address for approval emails.
+    Default: ""
+
+  NotificationRecipientEmail:
+    Type: String
+    Description: Email address to receive notification and confirmation emails.
+    Default: ""
+
+  JiraBaseUrl:
+    Type: String
+    Description: Jira instance base URL (e.g., https://myorg.atlassian.net). Leave empty to skip Jira integration.
+    Default: ""
+
+  JiraProjectKey:
+    Type: String
+    Description: Jira project key for ticket creation (e.g., OPS).
+    Default: ""
+
+  JiraIssueType:
+    Type: String
+    Description: Jira issue type name (e.g., Bug, Task).
+    Default: "Task"
+
+  JiraUserEmail:
+    Type: String
+    Description: Jira account email for API authentication.
+    Default: ""
+
+  JiraSecretArn:
+    Type: String
+    Description: Secrets Manager ARN containing the Jira API token and team mappings.
+    Default: ""
+
+  JiraDefaultAssignee:
+    Type: String
+    Description: Default Jira assignee account ID when no service/OU mapping matches.
+    Default: ""
+
+  JiraTeamMappings:
+    Type: String
+    Description: JSON string with service_team_map and ou_team_map for ticket routing.
+    Default: "{}"
+
+  SlackWebhookUrl:
+    Type: String
+    Description: Slack incoming webhook URL for routing config review notifications.
+    Default: ""
+
+  SlackSigningSecret:
+    Type: String
+    Description: Slack app signing secret for verifying interactive payloads.
+    Default: ""
+    NoEcho: true
+
+  RequireRoutingApproval:
+    Type: String
+    Description: Whether routing config changes require Slack approval before writing to Secrets Manager (true=approval, false=auto-apply).
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  RemediationMode:
+    Type: String
+    Description: Controls remediation behavior for confirmed-impact health events. "approval" sends SES email with Approve button. "notification" sends notification only, no remediation.
+    Default: "approval"
+    AllowedValues:
+      - "approval"
+      - "notification"
+
+  AhaEventBusName:
+    Type: String
+    Description: Custom EventBridge bus name for AHA-forwarded events. Leave empty to skip AHA integration (only native aws.health events will be processed).
+    Default: ""
+
+  BedrockModelId:
+    Type: String
+    Description: Amazon Bedrock model ID for the agent (use regional prefix, e.g., us.anthropic.claude-sonnet-4-6 for US regions).
+    Default: "eu.anthropic.claude-sonnet-4-6"
+
+Conditions:
+  HasJiraSecretArn: !Not [!Equals [!Ref JiraSecretArn, ""]]
+  HasSesIdentity: !Not [!Equals [!Ref SesIdentityArn, ""]]
+  HasAhaEventBus: !Not [!Equals [!Ref AhaEventBusName, ""]]
+
+Resources:
+  # ===========================================================================
+  # Security Responsibilities (AWS Shared Responsibility Model):
+  # - AWS: Manages KMS infrastructure, encryption operations, service availability
+  # - Customer: Defines key policies, manages rotation, audits usage via CloudTrail
+  # - AWS: Secures Lambda execution environment, patches runtime
+  # - Customer: Configures least-privilege IAM policies, manages environment variables
+  # - AWS: Secures S3/DynamoDB/SNS/SQS infrastructure
+  # - Customer: Configures encryption, access policies, and monitoring
+  # See: https://aws.amazon.com/compliance/shared-responsibility-model/
+  #
+  # Security Verification Commands:
+  #   KMS key rotation:  aws kms get-key-rotation-status --key-id alias/phd-notification-key
+  #   S3 encryption:     aws s3api get-bucket-encryption --bucket phd-routing-config-${ACCOUNT_ID}
+  #   S3 public access:  aws s3api get-public-access-block --bucket phd-routing-config-${ACCOUNT_ID}
+  #   DynamoDB encryption: aws dynamodb describe-table --table-name phd-approval-store --query "Table.SSEDescription"
+  #   IAM policy audit:  aws iam simulate-principal-policy --policy-source-arn <role-arn> --action-names bedrock-agentcore:InvokeAgentRuntime
+  #   DLQ monitoring:    aws sqs get-queue-attributes --queue-url <dlq-url> --attribute-names ApproximateNumberOfMessages
+  # ===========================================================================
+
+  # IAM role for AgentCore Runtime (ECR pull + Bedrock invoke + S3 read)
+  AgentCoreRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Organizations API and EKS List* actions do not support resource-level permissions (AWS limitation). ECR GetAuthorizationToken is a global action."
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AgentCoreECRAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/phd-notification-classifier"
+        - PolicyName: AgentCoreBedrockAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - "arn:aws:bedrock:*::foundation-model/*"
+                  - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*"
+        - PolicyName: AgentCoreS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::phd-routing-config-${AWS::AccountId}/*"
+        - PolicyName: AgentCoreOrganizationsReadOnly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # AWS Organizations API does not support resource-level permissions.
+              # These are read-only actions for account context enrichment.
+              - Sid: OrganizationsReadOnly
+                Effect: Allow
+                Action:
+                  - organizations:DescribeAccount
+                  - organizations:DescribeOrganizationalUnit
+                  - organizations:ListParents
+                  - organizations:ListTagsForResource
+                Resource: "*"
+        - PolicyName: AgentCoreEKSReadOnly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # EKS List* actions do not support resource-level permissions (AWS limitation).
+              - Sid: EKSList
+                Effect: Allow
+                Action:
+                  - eks:ListClusters
+                  - eks:ListNodegroups
+                  - eks:ListAddons
+                Resource: "*"
+              # EKS Describe* scoped to clusters in this account/region.
+              - Sid: EKSDescribe
+                Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:DescribeNodegroup
+                  - eks:DescribeAddon
+                Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/*"
+        - PolicyName: AgentCoreSNSPublish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SNSPublishNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref HealthEventSnsTopic
+              - Sid: KMSForSNS
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !ImportValue phd-encryption-key-arn
+
+  # AgentCore Runtime — the AI agent execution environment
+  AgentCoreRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    DependsOn: AgentCoreRole
+    Properties:
+      AgentRuntimeName: phd_notification_classifier
+      Description: AWS Health Notification Classifier agent — classifies PHD events and performs impact analysis
+      RoleArn: !GetAtt AgentCoreRole.Arn
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Ref AgentContainerUri
+      EnvironmentVariables:
+        SNS_TOPIC_ARN: !Ref HealthEventSnsTopic
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        SYSTEM_PROMPT_S3_BUCKET: !Sub "phd-routing-config-${AWS::AccountId}"
+        SYSTEM_PROMPT_S3_KEY: "prompts/system_prompt.txt"
+
+  HealthEventSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: aha-health-event-notifications
+      KmsMasterKeyId: !ImportValue phd-encryption-key-arn
+
+  # DynamoDB table for approval tokens
+  ApprovalStore:
+    Type: AWS::DynamoDB::Table
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Explicit name intentional for cross-stack reference"
+    Properties:
+      TableName: phd-approval-store
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: token
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !ImportValue phd-encryption-key-arn
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # HTTP API for approval endpoint
+  # IAM role for API Gateway to write CloudWatch Logs
+  ApiGatewayLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayLoggingRole.Arn
+
+  ApprovalApi:
+    Type: AWS::Serverless::HttpApi
+    DependsOn: ApiGatewayAccount
+    Properties:
+      StageName: prod
+      AccessLogSettings:
+        DestinationArn: !ImportValue phd-api-access-log-group-arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","httpMethod":"$context.httpMethod","path":"$context.path","status":"$context.status"}'
+
+  # Approval Lambda
+  ApprovalFunction:
+    #checkov:skip=CKV_AWS_117:Lambda only accesses public AWS APIs
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda only accesses public AWS APIs - VPC adds cost without security benefit"
+    Properties:
+      CodeUri: ../
+      Handler: approval_lambda.handler.handler
+      Runtime: python3.13
+      Timeout: 900
+      MemorySize: 256
+      ReservedConcurrentExecutions: 10
+      KmsKeyArn: !ImportValue phd-encryption-key-arn
+      Environment:
+        Variables:
+          APPROVAL_TABLE_NAME: !Ref ApprovalStore
+          AGENT_RUNTIME_ENDPOINT_ARN: !GetAtt AgentCoreRuntime.AgentRuntimeArn
+          SES_SENDER_IDENTITY: !Ref SesIdentityArn
+          NOTIFICATION_RECIPIENT_EMAIL: !Ref NotificationRecipientEmail
+      Events:
+        ApproveGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApprovalApi
+            Path: /approve
+            Method: GET
+        ApprovePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApprovalApi
+            Path: /approve
+            Method: POST
+      Policies:
+        - Statement:
+            - Sid: KMSDecryptEnvVars
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !ImportValue phd-encryption-key-arn
+            - Sid: DynamoDBAccess
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApprovalStore.Arn
+            - Sid: InvokeAgentCore
+              Effect: Allow
+              Action: bedrock-agentcore:InvokeAgentRuntime
+              Resource: !Sub "${AgentCoreRuntime.AgentRuntimeArn}*"
+            - !If
+              - HasSesIdentity
+              - Sid: SESSendEmail
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${SesIdentityArn}"
+              - !Ref AWS::NoValue
+            - Sid: DLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+
+  # Health Event Lambda — routes EventBridge health events to AgentCore or SNS
+  HealthEventFunction:
+    #checkov:skip=CKV_AWS_117:Lambda only accesses public AWS APIs
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda only accesses public AWS APIs - VPC adds cost without security benefit"
+          - id: W76
+            reason: "Lambda routes to multiple AWS services (AgentCore, SNS, SES, DynamoDB, Secrets Manager, KMS) - all statements are least-privilege scoped"
+    Properties:
+      CodeUri: ../
+      Handler: aha_eventbridge_lambda.handler.handler
+      Runtime: python3.13
+      Timeout: 900
+      MemorySize: 256
+      ReservedConcurrentExecutions: 10
+      KmsKeyArn: !ImportValue phd-encryption-key-arn
+      Environment:
+        Variables:
+          AGENT_RUNTIME_ENDPOINT_ARN: !GetAtt AgentCoreRuntime.AgentRuntimeArn
+          SNS_TOPIC_ARN: !Ref HealthEventSnsTopic
+          LOG_LEVEL: INFO
+          APPROVAL_TABLE_NAME: !Ref ApprovalStore
+          SES_SENDER_IDENTITY: !Ref SesIdentityArn
+          APPROVAL_API_URL: !Sub "https://${ApprovalApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          NOTIFICATION_RECIPIENT_EMAIL: !Ref NotificationRecipientEmail
+          JIRA_BASE_URL: !Ref JiraBaseUrl
+          JIRA_PROJECT_KEY: !Ref JiraProjectKey
+          JIRA_ISSUE_TYPE: !Ref JiraIssueType
+          JIRA_USER_EMAIL: !Ref JiraUserEmail
+          JIRA_SECRET_ARN: !Ref JiraSecretArn
+          JIRA_DEFAULT_ASSIGNEE: !Ref JiraDefaultAssignee
+          JIRA_TEAM_MAPPINGS: !Ref JiraTeamMappings
+          REMEDIATION_MODE: !Ref RemediationMode
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      Events:
+        HealthEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - "aws.health"
+        AhaEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - "aha"
+            EventBusName: !If [HasAhaEventBus, !Ref AhaEventBusName, !Ref "AWS::NoValue"]
+      Policies:
+        - Statement:
+            - Sid: KMSDecryptEnvVars
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !ImportValue phd-encryption-key-arn
+            - Sid: InvokeAgentCore
+              Effect: Allow
+              Action: bedrock-agentcore:InvokeAgentRuntime
+              Resource: !Sub "${AgentCoreRuntime.AgentRuntimeArn}*"
+            - Sid: SNSPublish
+              Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref HealthEventSnsTopic
+            - Sid: KMSForSNS
+              Effect: Allow
+              Action:
+                - kms:GenerateDataKey
+                - kms:Decrypt
+              Resource: !ImportValue phd-encryption-key-arn
+            - Sid: DLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+            - Sid: DynamoDBApproval
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt ApprovalStore.Arn
+            - !If
+              - HasSesIdentity
+              - Sid: SESSendEmail
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${SesIdentityArn}"
+              - !Ref AWS::NoValue
+            - !If
+              - HasJiraSecretArn
+              - Sid: SecretsManagerJira
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref JiraSecretArn
+              - !Ref AWS::NoValue
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !ImportValue phd-encryption-key-arn
+
+  # Routing Config Lambda — triggered by S3 uploads, invokes Bedrock, posts to Slack
+  RoutingConfigFunction:
+    #checkov:skip=CKV_AWS_117:Lambda only accesses public AWS APIs
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda only accesses public AWS APIs - VPC adds cost without security benefit"
+    Properties:
+      CodeUri: ../
+      Handler: routing_config_lambda.handler.handler
+      Runtime: python3.13
+      Timeout: 300
+      MemorySize: 256
+      ReservedConcurrentExecutions: 10
+      KmsKeyArn: !ImportValue phd-encryption-key-arn
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          JIRA_SECRET_ARN: !Ref JiraSecretArn
+          REQUIRE_ROUTING_APPROVAL: !Ref RequireRoutingApproval
+          APPROVAL_TABLE_NAME: !Ref ApprovalStore
+          ROUTING_APPROVAL_API_URL: !Sub "https://${RoutingApprovalApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+      Policies:
+        - Statement:
+            - Sid: KMSDecryptEnvVars
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !ImportValue phd-encryption-key-arn
+            - Sid: S3ReadRoutingDoc
+              Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub "arn:aws:s3:::phd-routing-config-${AWS::AccountId}/*"
+            - Sid: BedrockInvoke
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - "arn:aws:bedrock:*::foundation-model/*"
+                - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*"
+            - !If
+              - HasJiraSecretArn
+              - Sid: SecretsManagerAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref JiraSecretArn
+              - !Ref AWS::NoValue
+            - Sid: DynamoDBApprovalToken
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt ApprovalStore.Arn
+            - Sid: DLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+
+  # S3 bucket for routing config document uploads
+  RoutingConfigBucket:
+    Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "S3 access logging not configured — accepted risk to avoid circular dependency"
+    DependsOn: RoutingConfigFunction
+    Properties:
+      BucketName: !Sub "phd-routing-config-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !ImportValue phd-access-logs-bucket-name
+        LogFilePrefix: routing-config-access/
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt RoutingConfigFunction.Arn
+
+  # Enforce TLS-only access to the routing config bucket
+  RoutingConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RoutingConfigBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt RoutingConfigBucket.Arn
+              - !Sub "${RoutingConfigBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # Permission for S3 to invoke the Routing Config Lambda
+  RoutingConfigS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RoutingConfigFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::phd-routing-config-${AWS::AccountId}"
+      SourceAccount: !Ref AWS::AccountId
+
+  # HTTP API for Slack interactive endpoint
+  RoutingApprovalApi:
+    Type: AWS::Serverless::HttpApi
+    DependsOn: ApiGatewayAccount
+    Properties:
+      StageName: prod
+      AccessLogSettings:
+        DestinationArn: !ImportValue phd-api-access-log-group-arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","httpMethod":"$context.httpMethod","path":"$context.path","status":"$context.status"}'
+
+  # Routing Approval Lambda — handles Slack interactive payloads
+  RoutingApprovalFunction:
+    #checkov:skip=CKV_AWS_117:Lambda only accesses public AWS APIs
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda only accesses public AWS APIs - VPC adds cost without security benefit"
+    Properties:
+      CodeUri: ../
+      Handler: routing_approval_lambda.handler.handler
+      Runtime: python3.13
+      Timeout: 30
+      MemorySize: 256
+      ReservedConcurrentExecutions: 10
+      KmsKeyArn: !ImportValue phd-encryption-key-arn
+      Environment:
+        Variables:
+          SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+          JIRA_SECRET_ARN: !Ref JiraSecretArn
+          JIRA_BASE_URL: !Ref JiraBaseUrl
+          JIRA_PROJECT_KEY: !Ref JiraProjectKey
+          JIRA_ISSUE_TYPE: !Ref JiraIssueType
+          JIRA_USER_EMAIL: !Ref JiraUserEmail
+          APPROVAL_TABLE_NAME: !Ref ApprovalStore
+      Events:
+        SlackInteractive:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RoutingApprovalApi
+            Path: /slack/interactive
+            Method: POST
+        ApproveRoutingGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RoutingApprovalApi
+            Path: /approve-routing
+            Method: GET
+        ApproveRoutingPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RoutingApprovalApi
+            Path: /approve-routing
+            Method: POST
+      Policies:
+        - Statement:
+            - Sid: KMSDecryptEnvVars
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !ImportValue phd-encryption-key-arn
+            - !If
+              - HasJiraSecretArn
+              - Sid: SecretsManagerAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref JiraSecretArn
+              - !Ref AWS::NoValue
+            - Sid: DynamoDBAccess
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApprovalStore.Arn
+            - Sid: DLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+
+Outputs:
+  AgentRuntimeArn:
+    Description: ARN of the AgentCore Runtime
+    Value: !GetAtt AgentCoreRuntime.AgentRuntimeArn
+  AgentRuntimeId:
+    Description: ID of the AgentCore Runtime
+    Value: !GetAtt AgentCoreRuntime.AgentRuntimeId
+  SnsTopicArn:
+    Description: ARN of the created SNS topic for health event notifications
+    Value: !Ref HealthEventSnsTopic
+  HealthEventFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt HealthEventFunction.Arn
+  DeadLetterQueueUrl:
+    Description: URL of the dead-letter queue
+    Value: !Ref DeadLetterQueue
+  ApprovalApiUrl:
+    Description: Approval API endpoint URL
+    Value: !Sub "https://${ApprovalApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  ApprovalTableName:
+    Description: DynamoDB table name for approval tokens
+    Value: !Ref ApprovalStore
+  RoutingConfigBucketName:
+    Description: S3 bucket name for routing config document uploads
+    Value: !Ref RoutingConfigBucket
+  SlackInteractiveEndpointUrl:
+    Description: Slack interactive endpoint URL for routing approval
+    Value: !Sub "https://${RoutingApprovalApi}.execute-api.${AWS::Region}.amazonaws.com/prod/slack/interactive"
+  RoutingConfigFunctionArn:
+    Description: ARN of the Routing Config Lambda function
+    Value: !GetAtt RoutingConfigFunction.Arn

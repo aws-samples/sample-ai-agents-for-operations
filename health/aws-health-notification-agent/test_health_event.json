@@ -1,0 +1,28 @@
+{
+  "version": "0",
+  "id": "test-e2e-001",
+  "detail-type": "AWS Health Event",
+  "source": "aws.health",
+  "account": "111122223333",
+  "time": "2026-04-04T10:00:00Z",
+  "region": "global",
+  "detail": {
+    "eventArn": "arn:aws:health:global::event/CASSANDRA/AWS_CASSANDRA_PLANNED_LIFECYCLE_EVENT/e2e_test_001",
+    "service": "CASSANDRA",
+    "eventTypeCode": "AWS_CASSANDRA_PLANNED_LIFECYCLE_EVENT",
+    "eventTypeCategory": "issue",
+    "statusCode": "open",
+    "eventDescription": [
+      {
+        "language": "en_US",
+        "latestDescription": "Amazon Keyspaces will no longer include Starfield C2 in its certificate chain after March 31, 2026. This change only impacts customers who have customized their TLS-initiating applications to exclusively trust Starfield C2. Without this update, your applications may fail to connect to Amazon Keyspaces after the change."
+      }
+    ],
+    "affectedEntities": [
+      {
+        "entityValue": "arn:aws:cassandra:us-east-1:111122223333:keyspace/test",
+        "awsAccountId": "111122223333"
+      }
+    ]
+  }
+}
