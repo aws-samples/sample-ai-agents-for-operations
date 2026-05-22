@@ -1,0 +1,145 @@
+# Copyright (c) 2026 Amazon Web Services
+# Licensed under the MIT-0 License
+# See LICENSE file in the project root for full license information.
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  PHD Security Foundation — KMS key, CloudWatch Log Group, and S3 access logging bucket.
+  Deploy this stack BEFORE the aha-eventbridge-lambda stack.
+
+Resources:
+  # Customer-managed KMS key for encrypting SNS, SQS, DynamoDB, and Lambda env vars
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for AWS Health notification resources (SNS, SQS, DynamoDB, Lambda)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowRootAccountFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowSNSUsage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+          - Sid: AllowSQSUsage
+            Effect: Allow
+            Principal:
+              Service: sqs.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+          - Sid: AllowLambdaUsage
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+            Resource: "*"
+
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/phd-notification-key
+      TargetKeyId: !Ref EncryptionKey
+
+  # CloudWatch Log Group for API Gateway access logs
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/apigateway/phd-health-access-logs
+      RetentionInDays: 90
+      KmsKeyId: !GetAtt EncryptionKey.Arn
+
+  # S3 bucket for access logs (routing config bucket logs here)
+  AccessLogsBucket:
+    #checkov:skip=CKV_AWS_18:This IS the access logging destination bucket; enabling logging on it would create a circular dependency
+    Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "This IS the access logging destination bucket; enabling logging on it would create a circular dependency"
+    Properties:
+      BucketName: !Sub "phd-routing-config-logs-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      VersioningConfiguration:
+        Status: Enabled
+
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt AccessLogsBucket.Arn
+              - !Sub "${AccessLogsBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+Outputs:
+  EncryptionKeyArn:
+    Description: ARN of the customer-managed KMS key
+    Value: !GetAtt EncryptionKey.Arn
+    Export:
+      Name: phd-encryption-key-arn
+
+  EncryptionKeyId:
+    Description: ID of the customer-managed KMS key
+    Value: !Ref EncryptionKey
+    Export:
+      Name: phd-encryption-key-id
+
+  ApiAccessLogGroupArn:
+    Description: ARN of the API Gateway access log group
+    Value: !GetAtt ApiAccessLogGroup.Arn
+    Export:
+      Name: phd-api-access-log-group-arn
+
+  AccessLogsBucketName:
+    Description: Name of the S3 access logs bucket
+    Value: !Ref AccessLogsBucket
+    Export:
+      Name: phd-access-logs-bucket-name
