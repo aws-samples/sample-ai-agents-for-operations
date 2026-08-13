@@ -1,0 +1,6 @@
+# Ruff linter configuration
+
+[lint.per-file-ignores]
+# Test files legitimately import after sys.path/sys.modules manipulation
+# and mock setup that must precede the module-under-test import.
+"tests/**" = ["E402"]

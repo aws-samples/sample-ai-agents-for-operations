@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+strands-env/
+
+# CDK / CloudFormation
+.cdk.staging
+**/cdk.out/
+
+# SAM
+.aws-sam/
+samconfig.toml
+packaged.yaml
+
+# Lambda layers - generated dependencies
+lambda/**/layer/build/
+lambda/**/layer/.build/
+
+# Secrets - NEVER commit these
+.env
+.env.*
+params.json
+*.secrets
+setup-local.sh
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+**/.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.hypothesis/
+htmlcov/
+.coverage
+
+# Temporary files
+tmp-*
+*.tmp
+*.log
+local/
+
+# Kiro local state
+.kiro/local/
+.kiro/python-path.cfg
+
+# Package managers
+uv.lock
+package-lock.json
+infra/lambda/slack_integration/layer/.build/
+
