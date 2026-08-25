@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt -r requirements-dev.txt
 
 # Testing
-pytest==8.3.3
+pytest==9.0.3
 pytest-cov==6.0.0
 pytest-mock==3.14.0
 
