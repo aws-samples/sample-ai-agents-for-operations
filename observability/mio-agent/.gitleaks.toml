@@ -1,0 +1,26 @@
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''infra/cdk\.out/''',
+    '''cdk\.out/''',
+]
+
+[[rules]]
+id = "aws-access-token"
+description = "AWS Access Token"
+[rules.allowlist]
+paths = [
+    '''tests/''',
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+[rules.allowlist]
+paths = [
+    '''docs/''',
+    '''infra/cdk\.out/''',
+    '''cdk\.out/''',
+]

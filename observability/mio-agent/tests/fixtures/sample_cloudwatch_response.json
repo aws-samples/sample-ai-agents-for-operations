@@ -1,0 +1,43 @@
+{
+  "alarms": [
+    {
+      "Name": "Lambda-Error-Rate-High",
+      "StateValue": "OK",
+      "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:alerts"],
+      "Dimensions": [{"Name": "FunctionName", "Value": "order-processor-prod"}],
+      "MetricName": "Errors",
+      "Namespace": "AWS/Lambda",
+      "Threshold": 10.0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching"
+    },
+    {
+      "Name": "RDS-CPU-High",
+      "StateValue": "INSUFFICIENT_DATA",
+      "AlarmActions": [],
+      "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "prod-postgres"}],
+      "MetricName": "CPUUtilization",
+      "Namespace": "AWS/RDS",
+      "Threshold": 80.0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "missing"
+    }
+  ],
+  "log_groups": [
+    {
+      "logGroupName": "/aws/lambda/order-processor-prod",
+      "retentionInDays": 30,
+      "storedBytes": 1048576
+    },
+    {
+      "logGroupName": "/aws/lambda/payment-gateway-prod",
+      "storedBytes": 2097152
+    }
+  ],
+  "dashboards": [
+    {
+      "DashboardName": "Operations-Overview",
+      "LastModified": "2025-01-10T08:00:00Z"
+    }
+  ]
+}

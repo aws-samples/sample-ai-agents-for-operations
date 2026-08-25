@@ -1,0 +1,13 @@
+# Checkov configuration for MIO Agent
+# https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html
+
+# Skip checks on test fixtures only.
+# tests/fixtures/ contains intentionally incomplete infrastructure configurations
+# used to test MIO Agent's gap-detection logic. The production CDK stack in
+# infrastructure/ has all controls properly enabled.
+#
+# Note: skip-check is intentionally omitted here. skip-path is sufficient and
+# correctly scoped — skip-check is not path-scoped and would suppress checks
+# repo-wide including infrastructure/.
+skip-path:
+  - tests/fixtures

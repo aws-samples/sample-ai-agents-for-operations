@@ -1,0 +1,23 @@
+# MIO Agent — Development and test dependencies (pinned)
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+# Testing
+pytest==8.3.3
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+
+# AWS mocking
+moto[cloudwatch,logs,xray,dynamodb,s3,ssm,sts,lambda,ecs,ec2,rds,support,cloudtrail,cloudformation]==5.0.19
+
+# Linting
+ruff==0.7.4
+
+# Type checking
+mypy==1.13.0
+
+# boto3 type stubs
+boto3-stubs[cloudwatch,logs,xray,dynamodb,s3,ssm,sts,lambda,ecs,ec2,rds,health,support,cloudtrail,config,cloudformation]==1.35.0
+
+# Build tools
+setuptools>=68.0
+wheel>=0.44.0

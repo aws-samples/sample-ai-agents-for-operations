@@ -1,0 +1,62 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Sample production stack for MIO Agent IaC scanning tests — NOT a production template",
+  "Metadata": {
+    "checkov": {
+      "skip": [
+        "CKV_AWS_117",
+        "CKV_AWS_115",
+        "CKV_AWS_116",
+        "CKV_AWS_157",
+        "CKV_AWS_16",
+        "CKV_AWS_161",
+        "CKV_AWS_76",
+        "CKV_AWS_73",
+        "CKV_AWS_120"
+      ],
+      "comment": "Test fixture only — not a production deployment template. Production CDK stack in infrastructure/ has all security controls enabled."
+    }
+  },
+  "Resources": {
+    "OrderProcessor": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "order-processor-prod",
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {"Fn::GetAtt": ["LambdaRole", "Arn"]},
+        "Code": {"S3Bucket": "my-bucket", "S3Key": "code.zip"},
+        "TracingConfig": {"Mode": "Active"}
+      }
+    },
+    "PaymentGateway": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "payment-gateway-prod",
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {"Fn::GetAtt": ["LambdaRole", "Arn"]},
+        "Code": {"S3Bucket": "my-bucket", "S3Key": "payment.zip"}
+      }
+    },
+    "ProdDatabase": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "DBInstanceClass": "db.t3.medium",
+        "Engine": "postgres",
+        "MonitoringInterval": 60,
+        "MonitoringRoleArn": {"Fn::GetAtt": ["RDSMonitoringRole", "Arn"]},
+        "EnablePerformanceInsights": true,
+        "StorageEncrypted": true
+      }
+    },
+    "ApiStage": {
+      "Type": "AWS::ApiGateway::Stage",
+      "Properties": {
+        "RestApiId": {"Ref": "MyApi"},
+        "StageName": "prod",
+        "TracingEnabled": false
+      }
+    }
+  }
+}

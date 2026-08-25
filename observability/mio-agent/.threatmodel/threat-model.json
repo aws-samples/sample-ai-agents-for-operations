@@ -1,0 +1,804 @@
+{
+  "schema": 1,
+  "applicationInfo": {
+    "name": "Threat Model Export",
+    "description": "MIO Agent (Monitoring Intelligence and Observability Agent) is an agentic AI system built on Amazon Bedrock that continuously assesses the monitoring and observability posture of AWS customer environments. It is used by AWS Technical Account Managers (TAMs) to proactively identify observability gaps in customer AWS accounts before production incidents expose blind spots. The agent analyzes CloudWatch configuration, IaC templates, and third-party monitoring coverage, then generates prioritized gap reports with specific recommendations. It operates in a TAM-facing tool context where the TAM uses findings to advise customers."
+  },
+  "architecture": {
+    "description": ""
+  },
+  "dataflow": {
+    "description": ""
+  },
+  "assumptions": [
+    {
+      "id": "A001",
+      "numericId": 1,
+      "content": "IAM SigV4 enforced on all API Gateway endpoints — verified in infrastructure/stacks/mio_agent_stack.py _create_api_gateway() with authorization_type=apigw.AuthorizationType.IAM on every method.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "A002",
+      "numericId": 2,
+      "content": "Prompt injection detection implemented in src/mio_agent/guardrails/input_validator.py with 9 regex patterns. sanitize_narrative_input() called before all Bedrock invocations in narrative.py.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "A003",
+      "numericId": 3,
+      "content": "STS AssumeRole in CDK restricted to arn:aws:iam::*:role/MIOAgentReadOnly only. However, no runtime check in Coordinator Lambda verifies the target account_id is in the registered accounts table before assuming the role.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "A004",
+      "numericId": 4,
+      "content": "Human review gate (Layer 5) creates PENDING_REVIEW records for CUSTOMER and LEADERSHIP reports. TAM reviewed_by field is taken from request body (body.get reviewed_by), not derived from the authenticated IAM principal.",
+      "displayOrder": 4,
+      "metadata": []
+    }
+  ],
+  "mitigations": [
+    {
+      "id": "ae342de0-385c-43c5-9cb1-7ecca9a17b6e",
+      "numericId": 1,
+      "status": "mitigationIdentified",
+      "content": "Reduce presigned URL expiry to 15 minutes for customer report sharing",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "07c22413-65d1-40dd-aaaf-fb26be685a99",
+      "numericId": 2,
+      "status": "mitigationIdentified",
+      "content": "Add account ID allowlist check before STS AssumeRole to prevent cross-account access to unregistered accounts",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "a2f3a962-6589-4328-956e-3a1407fa3ad0",
+      "numericId": 3,
+      "status": "mitigationIdentified",
+      "content": "Enable AWS CloudTrail data events on S3 bucket and DynamoDB tables for tamper detection",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "abd072ae-c29b-467b-8092-c6efd7a768ef",
+      "numericId": 4,
+      "status": "mitigationIdentified",
+      "content": "Add CloudWatch alarm on Lambda error rate and Bedrock throttle errors for DoS detection",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "727df326-93df-4588-b322-0b31e0575b5a",
+      "numericId": 5,
+      "status": "mitigationResolved",
+      "content": "IAM SigV4 authentication on all API Gateway endpoints",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "9f7e59a1-faf6-4d58-a8ef-8b2d34c40bb5",
+      "numericId": 6,
+      "status": "mitigationResolved",
+      "content": "API Gateway throttling: 10 req/s sustained, 20 burst limit",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "b82cfc1c-d80d-4abb-b778-cefa412dcc27",
+      "numericId": 7,
+      "status": "mitigationResolved",
+      "content": "Prompt injection detection via regex pattern matching in input_validator.py",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "46897739-5321-4059-b89a-d76202c4704c",
+      "numericId": 8,
+      "status": "mitigationResolved",
+      "content": "Amazon Bedrock Guardrails for content filtering and PII redaction on all LLM calls",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "c323d203-c716-4325-9d92-73afe19e302b",
+      "numericId": 9,
+      "status": "mitigationResolved",
+      "content": "5-layer guardrail pipeline applied to every assessment output",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "f26c36bf-439f-4822-ad74-e46075da8fee",
+      "numericId": 10,
+      "status": "mitigationResolved",
+      "content": "Human-in-the-loop review: customer reports require explicit TAM approval before delivery",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "6f2436b1-4566-4d0f-8c89-5861f4d05232",
+      "numericId": 11,
+      "status": "mitigationResolved",
+      "content": "Least-privilege IAM role scoped to specific resource ARNs",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "f3e94caf-d014-4f23-acde-f1433c8ac0b3",
+      "numericId": 12,
+      "status": "mitigationResolved",
+      "content": "Cross-account STS AssumeRole restricted to MIOAgentReadOnly role pattern only",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "1e90a2ca-47ce-457a-9ad7-d5adbfdad644",
+      "numericId": 13,
+      "status": "mitigationResolved",
+      "content": "DynamoDB PITR enabled on all 4 tables for tampered data recovery",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "3f8393eb-fcb5-45fb-9feb-f71d5b65baea",
+      "numericId": 14,
+      "status": "mitigationResolved",
+      "content": "S3 bucket: block public access, SSL enforcement, AES256, versioning, 365-day lifecycle",
+      "displayOrder": 14,
+      "metadata": []
+    },
+    {
+      "id": "df5ab556-93bd-4e85-b85f-bce6bbe1acbc",
+      "numericId": 15,
+      "status": "mitigationResolved",
+      "content": "SQS SQS-managed encryption and DLQ after 3 failed receive attempts",
+      "displayOrder": 15,
+      "metadata": []
+    },
+    {
+      "id": "cdc093ae-a270-4b3e-bba7-7bb2a62b8757",
+      "numericId": 16,
+      "status": "mitigationResolved",
+      "content": "Lambda reserved concurrency limit of 10 on Coordinator to prevent resource exhaustion",
+      "displayOrder": 16,
+      "metadata": []
+    },
+    {
+      "id": "e9f92c0b-9a20-41e6-ab40-bd9a51db7e06",
+      "numericId": 17,
+      "status": "mitigationResolved",
+      "content": "Structured JSON logging with CloudWatch Logs 30-day retention on all Lambda functions",
+      "displayOrder": 17,
+      "metadata": []
+    },
+    {
+      "id": "5f96cc20-5d1c-488b-8f4d-7f02e2fdaf42",
+      "numericId": 18,
+      "status": "mitigationResolved",
+      "content": "Presigned S3 URL expiry capped at 1 hour default",
+      "displayOrder": 18,
+      "metadata": []
+    },
+    {
+      "id": "b71580d4-3873-491d-9fe3-938b2328fb6d",
+      "numericId": 19,
+      "status": "mitigationResolved",
+      "content": "Input size limits: IaC templates 5MB, trigger_context 20 keys, account names 256 chars",
+      "displayOrder": 19,
+      "metadata": []
+    },
+    {
+      "id": "d24f5924-a9d7-4a9e-88a5-abeaee6251de",
+      "numericId": 20,
+      "status": "mitigationResolved",
+      "content": "Confidence gate blocks customer output when assessment confidence is LOW",
+      "displayOrder": 20,
+      "metadata": []
+    },
+    {
+      "id": "c9433642-1cfb-4ceb-920f-03a5d3fda91f",
+      "numericId": 21,
+      "status": "mitigationResolved",
+      "content": "Account registration allowlist: only registered accounts in mio-agent-accounts table can be assessed",
+      "displayOrder": 21,
+      "metadata": []
+    },
+    {
+      "id": "29f8f58f-9dd2-4fbb-9118-28fb9af355f9",
+      "numericId": 22,
+      "status": "mitigationResolved",
+      "content": "Dependency pinning in requirements.txt to mitigate supply chain version confusion",
+      "displayOrder": 22,
+      "metadata": []
+    },
+    {
+      "id": "b9348e35-76ae-4a8c-880a-ada6ec9eb611",
+      "numericId": 23,
+      "status": "mitigationIdentified",
+      "content": "Reduce presigned S3 URL expiry to 15 minutes for customer report sharing",
+      "displayOrder": 23,
+      "metadata": []
+    },
+    {
+      "id": "04a1dc2d-d28b-42be-89b9-d083215a0011",
+      "numericId": 24,
+      "status": "mitigationIdentified",
+      "content": "Add explicit account ID allowlist check before STS AssumeRole",
+      "displayOrder": 24,
+      "metadata": []
+    },
+    {
+      "id": "8110e8be-90a6-4b67-ba60-3658728a317a",
+      "numericId": 25,
+      "status": "mitigationIdentified",
+      "content": "Enable CloudTrail data events on S3 and DynamoDB for tamper detection",
+      "displayOrder": 25,
+      "metadata": []
+    },
+    {
+      "id": "3aa0c02f-7cf8-4a29-a8be-939fc3b2bc2b",
+      "numericId": 26,
+      "status": "mitigationIdentified",
+      "content": "Add CloudWatch alarms for Lambda error rate and Bedrock throttle errors",
+      "displayOrder": 26,
+      "metadata": []
+    }
+  ],
+  "assumptionLinks": [],
+  "mitigationLinks": [
+    {
+      "linkedId": "a05faac2-97f2-4007-a0b6-532817ce08f5",
+      "mitigationId": "727df326-93df-4588-b322-0b31e0575b5a"
+    },
+    {
+      "linkedId": "a05faac2-97f2-4007-a0b6-532817ce08f5",
+      "mitigationId": "9f7e59a1-faf6-4d58-a8ef-8b2d34c40bb5"
+    },
+    {
+      "linkedId": "a05faac2-97f2-4007-a0b6-532817ce08f5",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "ecc23b61-287b-4229-85d7-5524eb8852c7",
+      "mitigationId": "f3e94caf-d014-4f23-acde-f1433c8ac0b3"
+    },
+    {
+      "linkedId": "ecc23b61-287b-4229-85d7-5524eb8852c7",
+      "mitigationId": "c9433642-1cfb-4ceb-920f-03a5d3fda91f"
+    },
+    {
+      "linkedId": "ecc23b61-287b-4229-85d7-5524eb8852c7",
+      "mitigationId": "04a1dc2d-d28b-42be-89b9-d083215a0011"
+    },
+    {
+      "linkedId": "30a467b6-8734-41b4-b6ad-d38cfb6a403b",
+      "mitigationId": "727df326-93df-4588-b322-0b31e0575b5a"
+    },
+    {
+      "linkedId": "30a467b6-8734-41b4-b6ad-d38cfb6a403b",
+      "mitigationId": "f26c36bf-439f-4822-ad74-e46075da8fee"
+    },
+    {
+      "linkedId": "30a467b6-8734-41b4-b6ad-d38cfb6a403b",
+      "mitigationId": "e9f92c0b-9a20-41e6-ab40-bd9a51db7e06"
+    },
+    {
+      "linkedId": "dc18a75d-e3bf-487d-a982-be0c2fdf375b",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "dc18a75d-e3bf-487d-a982-be0c2fdf375b",
+      "mitigationId": "1e90a2ca-47ce-457a-9ad7-d5adbfdad644"
+    },
+    {
+      "linkedId": "dc18a75d-e3bf-487d-a982-be0c2fdf375b",
+      "mitigationId": "3f8393eb-fcb5-45fb-9feb-f71d5b65baea"
+    },
+    {
+      "linkedId": "dc18a75d-e3bf-487d-a982-be0c2fdf375b",
+      "mitigationId": "8110e8be-90a6-4b67-ba60-3658728a317a"
+    },
+    {
+      "linkedId": "eb40e8c2-7817-4bfb-8f5c-93925900fa17",
+      "mitigationId": "b82cfc1c-d80d-4abb-b778-cefa412dcc27"
+    },
+    {
+      "linkedId": "eb40e8c2-7817-4bfb-8f5c-93925900fa17",
+      "mitigationId": "46897739-5321-4059-b89a-d76202c4704c"
+    },
+    {
+      "linkedId": "eb40e8c2-7817-4bfb-8f5c-93925900fa17",
+      "mitigationId": "c323d203-c716-4325-9d92-73afe19e302b"
+    },
+    {
+      "linkedId": "9bbbd903-d220-4350-b82c-998ac8e2b7aa",
+      "mitigationId": "df5ab556-93bd-4e85-b85f-bce6bbe1acbc"
+    },
+    {
+      "linkedId": "9bbbd903-d220-4350-b82c-998ac8e2b7aa",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "fec9f18b-a6bb-4374-b29e-28db418fce51",
+      "mitigationId": "f26c36bf-439f-4822-ad74-e46075da8fee"
+    },
+    {
+      "linkedId": "fec9f18b-a6bb-4374-b29e-28db418fce51",
+      "mitigationId": "e9f92c0b-9a20-41e6-ab40-bd9a51db7e06"
+    },
+    {
+      "linkedId": "fec9f18b-a6bb-4374-b29e-28db418fce51",
+      "mitigationId": "1e90a2ca-47ce-457a-9ad7-d5adbfdad644"
+    },
+    {
+      "linkedId": "ec8de77a-aea9-4209-8bca-7bbe0edea079",
+      "mitigationId": "8110e8be-90a6-4b67-ba60-3658728a317a"
+    },
+    {
+      "linkedId": "ec8de77a-aea9-4209-8bca-7bbe0edea079",
+      "mitigationId": "3f8393eb-fcb5-45fb-9feb-f71d5b65baea"
+    },
+    {
+      "linkedId": "ec8de77a-aea9-4209-8bca-7bbe0edea079",
+      "mitigationId": "e9f92c0b-9a20-41e6-ab40-bd9a51db7e06"
+    },
+    {
+      "linkedId": "a24b7d89-6417-4a72-b50c-0e567ffae653",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "a24b7d89-6417-4a72-b50c-0e567ffae653",
+      "mitigationId": "1e90a2ca-47ce-457a-9ad7-d5adbfdad644"
+    },
+    {
+      "linkedId": "a24b7d89-6417-4a72-b50c-0e567ffae653",
+      "mitigationId": "3f8393eb-fcb5-45fb-9feb-f71d5b65baea"
+    },
+    {
+      "linkedId": "a24b7d89-6417-4a72-b50c-0e567ffae653",
+      "mitigationId": "8110e8be-90a6-4b67-ba60-3658728a317a"
+    },
+    {
+      "linkedId": "7146cfca-c857-41d4-9505-8442d2d15562",
+      "mitigationId": "5f96cc20-5d1c-488b-8f4d-7f02e2fdaf42"
+    },
+    {
+      "linkedId": "7146cfca-c857-41d4-9505-8442d2d15562",
+      "mitigationId": "b9348e35-76ae-4a8c-880a-ada6ec9eb611"
+    },
+    {
+      "linkedId": "79ae5efc-89bb-4b61-ba02-313a0d113849",
+      "mitigationId": "b82cfc1c-d80d-4abb-b778-cefa412dcc27"
+    },
+    {
+      "linkedId": "79ae5efc-89bb-4b61-ba02-313a0d113849",
+      "mitigationId": "46897739-5321-4059-b89a-d76202c4704c"
+    },
+    {
+      "linkedId": "b8e039ef-7b70-44a2-bc06-9f68d47d52c5",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "b8e039ef-7b70-44a2-bc06-9f68d47d52c5",
+      "mitigationId": "e9f92c0b-9a20-41e6-ab40-bd9a51db7e06"
+    },
+    {
+      "linkedId": "a2e4dd1c-62b7-407b-8a11-1df17c2d767a",
+      "mitigationId": "9f7e59a1-faf6-4d58-a8ef-8b2d34c40bb5"
+    },
+    {
+      "linkedId": "a2e4dd1c-62b7-407b-8a11-1df17c2d767a",
+      "mitigationId": "cdc093ae-a270-4b3e-bba7-7bb2a62b8757"
+    },
+    {
+      "linkedId": "a2e4dd1c-62b7-407b-8a11-1df17c2d767a",
+      "mitigationId": "3aa0c02f-7cf8-4a29-a8be-939fc3b2bc2b"
+    },
+    {
+      "linkedId": "6d4950f7-7ed8-4608-a6e1-3e97109cb039",
+      "mitigationId": "9f7e59a1-faf6-4d58-a8ef-8b2d34c40bb5"
+    },
+    {
+      "linkedId": "6d4950f7-7ed8-4608-a6e1-3e97109cb039",
+      "mitigationId": "cdc093ae-a270-4b3e-bba7-7bb2a62b8757"
+    },
+    {
+      "linkedId": "812e8232-9148-4861-b534-44bdd0c1e45c",
+      "mitigationId": "6f2436b1-4566-4d0f-8c89-5861f4d05232"
+    },
+    {
+      "linkedId": "812e8232-9148-4861-b534-44bdd0c1e45c",
+      "mitigationId": "29f8f58f-9dd2-4fbb-9118-28fb9af355f9"
+    },
+    {
+      "linkedId": "a9ff3669-8109-46b8-b0c4-7ba369030815",
+      "mitigationId": "f3e94caf-d014-4f23-acde-f1433c8ac0b3"
+    },
+    {
+      "linkedId": "a9ff3669-8109-46b8-b0c4-7ba369030815",
+      "mitigationId": "04a1dc2d-d28b-42be-89b9-d083215a0011"
+    },
+    {
+      "linkedId": "8c2fce80-2741-4e00-93e7-76b7ff3fee5d",
+      "mitigationId": "727df326-93df-4588-b322-0b31e0575b5a"
+    },
+    {
+      "linkedId": "8c2fce80-2741-4e00-93e7-76b7ff3fee5d",
+      "mitigationId": "f26c36bf-439f-4822-ad74-e46075da8fee"
+    }
+  ],
+  "threats": [
+    {
+      "id": "a05faac2-97f2-4007-a0b6-532817ce08f5",
+      "numericId": 1,
+      "threatSource": "External attacker or compromised TAM credentials",
+      "prerequisites": "Attacker obtains or forges valid AWS IAM credentials for a TAM user",
+      "threatAction": "forge or replay IAM SigV4 signed API requests to POST /assess or POST /reports/{id}/approve",
+      "threatImpact": "unauthorized assessment triggers or fraudulent report approvals delivered to customers",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009",
+        "A010",
+        "A011"
+      ],
+      "statement": "A External attacker or compromised TAM credentials Attacker obtains or forges valid AWS IAM credentials for a TAM user can forge or replay IAM SigV4 signed API requests to POST /assess or POST /reports/{id}/approve, which leads to unauthorized assessment triggers or fraudulent report approvals delivered to customers",
+      "displayOrder": 1,
+      "status": "threatResolved",
+      "tags": [
+        "api",
+        "iam",
+        "authentication"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "ecc23b61-287b-4229-85d7-5524eb8852c7",
+      "numericId": 2,
+      "threatSource": "External attacker with knowledge of role ARN pattern",
+      "prerequisites": "Attacker compromises Lambda execution environment or exfiltrates IAM role ARN from Accounts table",
+      "threatAction": "forge an AssumeRole request using a stolen MIOAgentReadOnly role ARN to gain cross-account access to customer AWS accounts",
+      "threatImpact": "unauthorized read access to customer AWS resources; data exfiltration of CloudWatch metrics, EC2/RDS inventory, IaC templates",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A011"
+      ],
+      "statement": "A External attacker with knowledge of role ARN pattern Attacker compromises Lambda execution environment or exfiltrates IAM role ARN from Accounts table can forge an AssumeRole request using a stolen MIOAgentReadOnly role ARN to gain cross-account access to customer AWS accounts, which leads to unauthorized read access to customer AWS resources; data exfiltration of CloudWatch metrics, EC2/RDS inventory, IaC templates",
+      "displayOrder": 2,
+      "status": "threatIdentified",
+      "tags": [
+        "cross-account",
+        "sts",
+        "iam"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "30a467b6-8734-41b4-b6ad-d38cfb6a403b",
+      "numericId": 3,
+      "threatSource": "Malicious insider (rogue TAM)",
+      "prerequisites": "Attacker has valid IAM credentials for any TAM user",
+      "threatAction": "impersonate a different TAM alias in the reviewed_by field when calling POST /reports/{id}/approve",
+      "threatImpact": "fraudulent review approval attributed to another TAM; audit trail integrity compromised",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A013"
+      ],
+      "statement": "A Malicious insider (rogue TAM) Attacker has valid IAM credentials for any TAM user can impersonate a different TAM alias in the reviewed_by field when calling POST /reports/{id}/approve, which leads to fraudulent review approval attributed to another TAM; audit trail integrity compromised",
+      "displayOrder": 3,
+      "status": "threatIdentified",
+      "tags": [
+        "human-review",
+        "approval",
+        "audit"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "dc18a75d-e3bf-487d-a982-be0c2fdf375b",
+      "numericId": 4,
+      "threatSource": "Malicious insider or external attacker with data store write access",
+      "prerequisites": "Attacker has write access to DynamoDB assessments table or S3 reports bucket via misconfigured IAM or compromised Lambda role",
+      "threatAction": "modify stored assessment findings in DynamoDB or overwrite S3 report objects to alter OMS scores or inject false recommendations",
+      "threatImpact": "customer receives manipulated observability assessment; TAM makes incorrect recommendations; trust in agent output destroyed",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009",
+        "A010"
+      ],
+      "statement": "A Malicious insider or external attacker with data store write access Attacker has write access to DynamoDB assessments table or S3 reports bucket via misconfigured IAM or compromised Lambda role can modify stored assessment findings in DynamoDB or overwrite S3 report objects to alter OMS scores or inject false recommendations, which leads to customer receives manipulated observability assessment; TAM makes incorrect recommendations; trust in agent output destroyed",
+      "displayOrder": 4,
+      "status": "threatResolved",
+      "tags": [
+        "dynamodb",
+        "s3",
+        "data-integrity"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "eb40e8c2-7817-4bfb-8f5c-93925900fa17",
+      "numericId": 5,
+      "threatSource": "Prompt injection attacker or compromised customer account",
+      "prerequisites": "Adversary controls customer AWS resource names, tags, CloudFormation template content, or IaC parameter values",
+      "threatAction": "inject prompt injection payloads into customer-controlled data (resource names, tags, IaC templates) read by Coordinator Lambda and passed to Amazon Bedrock",
+      "threatImpact": "Bedrock generates false findings, leaks system prompt, or produces manipulated report content delivered to customer",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A012"
+      ],
+      "statement": "A Prompt injection attacker or compromised customer account Adversary controls customer AWS resource names, tags, CloudFormation template content, or IaC parameter values can inject prompt injection payloads into customer-controlled data (resource names, tags, IaC templates) read by Coordinator Lambda and passed to Amazon Bedrock, which leads to Bedrock generates false findings, leaks system prompt, or produces manipulated report content delivered to customer",
+      "displayOrder": 5,
+      "status": "threatIdentified",
+      "tags": [
+        "prompt-injection",
+        "bedrock",
+        "llm"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "9bbbd903-d220-4350-b82c-998ac8e2b7aa",
+      "numericId": 6,
+      "threatSource": "External attacker with SQS write access",
+      "prerequisites": "Attacker can send messages to the assessment SQS queue via misconfigured queue policy or IAM escalation",
+      "threatAction": "inject malformed or adversarial assessment request messages into the SQS queue to trigger unintended assessments or cause Lambda processing errors",
+      "threatImpact": "unexpected assessments triggered; potential Bedrock quota exhaustion or excessive cross-account role assumptions",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009"
+      ],
+      "statement": "A External attacker with SQS write access Attacker can send messages to the assessment SQS queue via misconfigured queue policy or IAM escalation can inject malformed or adversarial assessment request messages into the SQS queue to trigger unintended assessments or cause Lambda processing errors, which leads to unexpected assessments triggered; potential Bedrock quota exhaustion or excessive cross-account role assumptions",
+      "displayOrder": 6,
+      "status": "threatResolved",
+      "tags": [
+        "sqs",
+        "queue",
+        "message-tampering"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "fec9f18b-a6bb-4374-b29e-28db418fce51",
+      "numericId": 7,
+      "threatSource": "Malicious insider (rogue TAM) with DynamoDB access",
+      "prerequisites": "Review records can be deleted or TTL manipulated by entity with DynamoDB write access",
+      "threatAction": "delete or modify review audit records in Reviews DynamoDB table to erase evidence of who approved a report or when",
+      "threatImpact": "TAM cannot be held accountable for report approvals; audit trail for compliance and incident investigation destroyed",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A013"
+      ],
+      "statement": "A Malicious insider (rogue TAM) with DynamoDB access Review records can be deleted or TTL manipulated by entity with DynamoDB write access can delete or modify review audit records in Reviews DynamoDB table to erase evidence of who approved a report or when, which leads to TAM cannot be held accountable for report approvals; audit trail for compliance and incident investigation destroyed",
+      "displayOrder": 7,
+      "status": "threatIdentified",
+      "tags": [
+        "audit",
+        "non-repudiation",
+        "dynamodb"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "ec8de77a-aea9-4209-8bca-7bbe0edea079",
+      "numericId": 8,
+      "threatSource": "Malicious insider",
+      "prerequisites": "S3 versioning or access logging disabled",
+      "threatAction": "delete or overwrite S3 report objects and deny having generated a specific assessment outcome",
+      "threatImpact": "inability to prove what was delivered to customer; compliance and legal exposure for incorrect reports",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010"
+      ],
+      "statement": "A Malicious insider S3 versioning or access logging disabled can delete or overwrite S3 report objects and deny having generated a specific assessment outcome, which leads to inability to prove what was delivered to customer; compliance and legal exposure for incorrect reports",
+      "displayOrder": 8,
+      "status": "threatResolved",
+      "tags": [
+        "s3",
+        "logging",
+        "audit"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "a24b7d89-6417-4a72-b50c-0e567ffae653",
+      "numericId": 9,
+      "threatSource": "External attacker or malicious insider with data store access",
+      "prerequisites": "Misconfigured IAM policy grants overly broad DynamoDB or S3 read access, or Lambda execution credentials leaked",
+      "threatAction": "read all customer account IDs, IAM role ARNs, OMS scores, and findings JSON from DynamoDB tables or enumerate all reports from S3",
+      "threatImpact": "mass exfiltration of customer AWS account configurations, observability gap intelligence, and IAM role ARNs enabling further cross-account attacks",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009",
+        "A010",
+        "A011"
+      ],
+      "statement": "A External attacker or malicious insider with data store access Misconfigured IAM policy grants overly broad DynamoDB or S3 read access, or Lambda execution credentials leaked can read all customer account IDs, IAM role ARNs, OMS scores, and findings JSON from DynamoDB tables or enumerate all reports from S3, which leads to mass exfiltration of customer AWS account configurations, observability gap intelligence, and IAM role ARNs enabling further cross-account attacks",
+      "displayOrder": 9,
+      "status": "threatResolved",
+      "tags": [
+        "dynamodb",
+        "s3",
+        "data-exfiltration"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "7146cfca-c857-41d4-9505-8442d2d15562",
+      "numericId": 10,
+      "threatSource": "External attacker intercepting URL in email or chat",
+      "prerequisites": "Presigned URL intercepted in transit or shared beyond intended recipient",
+      "threatAction": "intercept or obtain a presigned S3 report URL and access confidential customer assessment report without IAM credentials",
+      "threatImpact": "unauthorized access to customer-specific observability gap report; disclosure of sensitive infrastructure details",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A015"
+      ],
+      "statement": "A External attacker intercepting URL in email or chat Presigned URL intercepted in transit or shared beyond intended recipient can intercept or obtain a presigned S3 report URL and access confidential customer assessment report without IAM credentials, which leads to unauthorized access to customer-specific observability gap report; disclosure of sensitive infrastructure details",
+      "displayOrder": 10,
+      "status": "threatIdentified",
+      "tags": [
+        "s3",
+        "presigned-url",
+        "report-sharing"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "79ae5efc-89bb-4b61-ba02-313a0d113849",
+      "numericId": 11,
+      "threatSource": "Prompt injection attacker",
+      "prerequisites": "Adversary successfully executes prompt injection via customer-controlled data read by the agent",
+      "threatAction": "craft prompt injection payload that causes Bedrock to include the system prompt or internal tool configuration in generated report output",
+      "threatImpact": "disclosure of system prompt reveals agent reasoning strategy, guardrail logic, and internal tool names; enables more targeted attacks",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A012"
+      ],
+      "statement": "A Prompt injection attacker Adversary successfully executes prompt injection via customer-controlled data read by the agent can craft prompt injection payload that causes Bedrock to include the system prompt or internal tool configuration in generated report output, which leads to disclosure of system prompt reveals agent reasoning strategy, guardrail logic, and internal tool names; enables more targeted attacks",
+      "displayOrder": 11,
+      "status": "threatIdentified",
+      "tags": [
+        "prompt-injection",
+        "bedrock",
+        "system-prompt"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "b8e039ef-7b70-44a2-bc06-9f68d47d52c5",
+      "numericId": 12,
+      "threatSource": "External attacker exploiting SSRF or error handling vulnerability",
+      "prerequisites": "Lambda execution environment misconfiguration or SSRF vulnerability exposes IMDS endpoint",
+      "threatAction": "access Lambda execution credentials via IMDS/SSRF or expose them in error responses",
+      "threatImpact": "attacker obtains temporary AWS credentials with full MIO Agent Lambda role access to all data stores and cross-account role assumption",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A External attacker exploiting SSRF or error handling vulnerability Lambda execution environment misconfiguration or SSRF vulnerability exposes IMDS endpoint can access Lambda execution credentials via IMDS/SSRF or expose them in error responses, which leads to attacker obtains temporary AWS credentials with full MIO Agent Lambda role access to all data stores and cross-account role assumption",
+      "displayOrder": 12,
+      "status": "threatIdentified",
+      "tags": [
+        "lambda",
+        "credentials",
+        "ssrf"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "a2e4dd1c-62b7-407b-8a11-1df17c2d767a",
+      "numericId": 13,
+      "threatSource": "External attacker or accidental misuse",
+      "prerequisites": "Attacker has valid IAM credentials (low bar for internal tool)",
+      "threatAction": "flood POST /assess endpoint to exhaust API Gateway throttle limits, Lambda concurrency, or Bedrock model invocation TPM quotas",
+      "threatImpact": "MIO Agent becomes unavailable; legitimate TAM assessments blocked; Bedrock quota exhausted affecting other account workloads",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009",
+        "A010"
+      ],
+      "statement": "A External attacker or accidental misuse Attacker has valid IAM credentials (low bar for internal tool) can flood POST /assess endpoint to exhaust API Gateway throttle limits, Lambda concurrency, or Bedrock model invocation TPM quotas, which leads to MIO Agent becomes unavailable; legitimate TAM assessments blocked; Bedrock quota exhausted affecting other account workloads",
+      "displayOrder": 13,
+      "status": "threatResolved",
+      "tags": [
+        "dos",
+        "bedrock",
+        "quota",
+        "lambda"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "6d4950f7-7ed8-4608-a6e1-3e97109cb039",
+      "numericId": 14,
+      "threatSource": "External attacker or misconfigured scheduler",
+      "prerequisites": "Attacker can trigger many Tier 3 assessment requests",
+      "threatAction": "trigger mass concurrent Tier 3 assessments to exhaust STS AssumeRole API rate limits and AWS service API quotas in customer accounts",
+      "threatImpact": "customer AWS account API rate limits exhausted; MIO Agent blocked from legitimate cross-account assessments",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009"
+      ],
+      "statement": "A External attacker or misconfigured scheduler Attacker can trigger many Tier 3 assessment requests can trigger mass concurrent Tier 3 assessments to exhaust STS AssumeRole API rate limits and AWS service API quotas in customer accounts, which leads to customer AWS account API rate limits exhausted; MIO Agent blocked from legitimate cross-account assessments",
+      "displayOrder": 14,
+      "status": "threatIdentified",
+      "tags": [
+        "sts",
+        "cross-account",
+        "quota"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "812e8232-9148-4861-b534-44bdd0c1e45c",
+      "numericId": 15,
+      "threatSource": "Supply chain attacker or external attacker exploiting Lambda vulnerability",
+      "prerequisites": "Critical vulnerability in Python runtime, boto3, or Lambda execution environment",
+      "threatAction": "exploit a Lambda sandbox escape or compromised dependency to access raw Lambda execution role credentials or escalate IAM permissions",
+      "threatImpact": "complete compromise of MIO Agent infrastructure; access to all data stores and cross-account role assumption capability",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Supply chain attacker or external attacker exploiting Lambda vulnerability Critical vulnerability in Python runtime, boto3, or Lambda execution environment can exploit a Lambda sandbox escape or compromised dependency to access raw Lambda execution role credentials or escalate IAM permissions, which leads to complete compromise of MIO Agent infrastructure; access to all data stores and cross-account role assumption capability",
+      "displayOrder": 15,
+      "status": "threatIdentified",
+      "tags": [
+        "lambda",
+        "iam",
+        "privilege-escalation",
+        "supply-chain"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "a9ff3669-8109-46b8-b0c4-7ba369030815",
+      "numericId": 16,
+      "threatSource": "External attacker or misconfigured IAM",
+      "prerequisites": "Wildcard account ID in STS AssumeRole resource condition or customer-misconfigured trust policy",
+      "threatAction": "assume MIOAgentReadOnly role in unregistered accounts by exploiting wildcard in arn:aws:iam::*:role/MIOAgentReadOnly resource or pivot to higher-privilege roles via misconfigured customer trust policy",
+      "threatImpact": "unauthorized cross-account access to customer accounts beyond the registered list",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A011",
+        "A014"
+      ],
+      "statement": "A External attacker or misconfigured IAM Wildcard account ID in STS AssumeRole resource condition or customer-misconfigured trust policy can assume MIOAgentReadOnly role in unregistered accounts by exploiting wildcard in arn:aws:iam::*:role/MIOAgentReadOnly resource or pivot to higher-privilege roles via misconfigured customer trust policy, which leads to unauthorized cross-account access to customer accounts beyond the registered list",
+      "displayOrder": 16,
+      "status": "threatIdentified",
+      "tags": [
+        "cross-account",
+        "sts",
+        "privilege-escalation"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "8c2fce80-2741-4e00-93e7-76b7ff3fee5d",
+      "numericId": 17,
+      "threatSource": "Malicious insider (rogue TAM)",
+      "prerequisites": "Malicious TAM or external attacker with any valid TAM IAM credentials",
+      "threatAction": "call POST /reports/{id}/approve with valid credentials to approve reports for customers outside the TAM's responsibility scope",
+      "threatImpact": "customer receives AI-generated report not reviewed by assigned TAM; quality and accuracy assurance bypassed",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A013"
+      ],
+      "statement": "A Malicious insider (rogue TAM) Malicious TAM or external attacker with any valid TAM IAM credentials can call POST /reports/{id}/approve with valid credentials to approve reports for customers outside the TAM's responsibility scope, which leads to customer receives AI-generated report not reviewed by assigned TAM; quality and accuracy assurance bypassed",
+      "displayOrder": 17,
+      "status": "threatIdentified",
+      "tags": [
+        "human-review",
+        "approval",
+        "bypass"
+      ],
+      "metadata": []
+    }
+  ]
+}

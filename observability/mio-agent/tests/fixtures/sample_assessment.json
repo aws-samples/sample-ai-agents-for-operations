@@ -1,0 +1,19 @@
+{
+  "assessment_id": "mio-2025-01-15-test-001",
+  "account_id": "123456789012",
+  "account_name": "Test Account",
+  "overall_oms": 2.8,
+  "risk_level": "HIGH",
+  "access_tier_used": "tier3",
+  "confidence": "HIGH",
+  "trend": "DECLINING",
+  "previous_oms": 3.1,
+  "total_findings": 5,
+  "dimensions": {
+    "metrics_coverage": {"score": 3.2, "weight": 0.25, "finding_count": 1},
+    "alerting_quality": {"score": 2.1, "weight": 0.25, "finding_count": 2},
+    "log_intelligence": {"score": 3.5, "weight": 0.20, "finding_count": 0},
+    "distributed_tracing": {"score": 1.8, "weight": 0.20, "finding_count": 2},
+    "incident_readiness": {"score": 3.0, "weight": 0.10, "finding_count": 0}
+  }
+}

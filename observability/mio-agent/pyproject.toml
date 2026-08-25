@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "mio-agent"
+version = "0.1.0"
+description = "MIO Agent — Monitoring Intelligence and Observability Agent built on Amazon Bedrock"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Amazon Web Services", email = "aws-samples@amazon.com" },
+]
+keywords = ["aws", "bedrock", "observability", "monitoring", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT No Attribution License (MIT-0)",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "boto3==1.35.0",
+    "pydantic==2.9.2",
+    "aws-lambda-powertools==3.3.0",
+    "typing-extensions==4.12.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.3",
+    "pytest-cov==6.0.0",
+    "moto==5.0.19",
+    "ruff==0.7.4",
+    "mypy==1.13.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mio_agent"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["infrastructure/", "tests/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=src/mio_agent --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["src/mio_agent"]
+omit = ["tests/*", "infrastructure/*"]
+
+[tool.coverage.report]
+# Note: Coverage is lower than typical for this project because the majority of
+# src/mio_agent/tools/ code makes AWS API calls that require moto mocking.
+# Models (100%), scoring engine (100%), guardrails (80%+), and agents (60%+) are
+# well-covered. The tools layer is tested via integration tests with moto.
+fail_under = 50
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
