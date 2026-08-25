@@ -12,7 +12,7 @@ An agentic AI system built on **Amazon Bedrock** that continuously assesses the 
 
 ## The Problem
 
-Enterprise teams on AWS often don't know their monitoring is insufficient until a production incident reveals a blind spot. By then, it's too late — slow detection adds minutes or hours to resolution time, and the root cause analysis starts from scratch.
+Enterprise teams running workloads on AWS often don't know their monitoring is insufficient until a production incident reveals a blind spot. By then, it's too late — slow detection adds minutes or hours to resolution time, and the root cause analysis starts from scratch.
 
 MIO Agent gives you a clear, evidence-based picture of your observability coverage before incidents happen.
 
