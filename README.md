@@ -3,7 +3,7 @@
 A collection of sample AI agents that demonstrate how to automate IT operations tasks using AWS services. These agents help operations teams reduce manual toil, accelerate incident response, and enforce best practices through intelligent automation.
 
 Each agent is a self-contained, deployable solution that follows a common pattern:
-- **Receive** operational signals (health events, cost anomalies, security findings)
+- **Receive** operational signals (health events, monitoring gaps, quota pressure, cost anomalies, security findings)
 - **Reason** about the signal using LLMs (Amazon Bedrock)
 - **Act** with appropriate guardrails (human-in-the-loop for high-risk actions)
 
@@ -12,10 +12,11 @@ Each agent is a self-contained, deployable solution that follows a common patter
 | Domain | Agent | Description | Status |
 |---|---|---|---|
 | **Health** | [AWS Health Notification Agent](health/aws-health-notification-agent/) | Classifies AWS Health Dashboard notifications, performs cross-account impact analysis, creates Jira tickets, and optionally executes approved remediation | Available |
+| **Observability** | [MIO Agent](observability/mio-agent/) | Continuously assesses monitoring and observability posture, scores maturity across 5 dimensions, and generates prioritized gap reports with implementation-ready fixes | Available |
+| **Cloud Governance** | [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) | Explains Amazon Bedrock usage, compares utilization against TPM/RPM quotas, and drafts or submits quota increase requests — via CLI or Slack | Available |
 | **Cost Optimization** | _Coming soon_ | Identifies misconfigured architectures and underutilized resources, suggests optimization plans | Planned |
 | **Resiliency** | _Coming soon_ | Monitors resilience posture, recommends failover actions, validates recovery procedures | Planned |
 | **Security** | _Coming soon_ | Automated security posture assessment, compliance drift detection, remediation guidance | Planned |
-| **Cloud Governance** | _Coming soon_ | Enforces tagging standards, resource configuration policies, and end-of-life upgrades | Planned |
 
 ## Repository Structure
 
@@ -23,10 +24,13 @@ Each agent is a self-contained, deployable solution that follows a common patter
 sample-ai-agents-for-operations/
 ├── health/                          # Health & availability domain
 │   └── aws-health-notification-agent/   # PHD event classification + remediation
+├── observability/                   # Monitoring & observability domain
+│   └── mio-agent/                       # Observability maturity assessment + gap reports
+├── governance/                      # Cloud governance domain
+│   └── bedrock-quota-assistant/         # Bedrock quota analysis + increase requests
 ├── cost-optimization/               # Cost & efficiency domain (planned)
 ├── resiliency/                      # Resilience & recovery domain (planned)
 ├── security/                        # Security posture domain (planned)
-├── governance/                      # Cloud governance domain (planned)
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 └── LICENSE
@@ -59,34 +63,51 @@ Each agent documents its autonomy level and the conditions for progression:
 
 Progression from L0 → L3 requires validated trust metrics: action success rate, false-positive rate, and blast radius assessment.
 
+Where today's agents sit:
+
+- **MIO Agent** — L0–L1. Read-only by design; it reports findings and recommends fixes but holds no write permissions in your account.
+- **Bedrock Quota Assistant** — L1–L2. Analysis and drafting are autonomous; submitting a quota increase support case (its only mutating action) requires explicit user confirmation.
+- **AWS Health Notification Agent** — L1–L2. Classification and ticket creation are autonomous; remediation runs only after human approval.
+
 ## Technology Stack
 
-All agents in this repository use:
+Every agent is written in Python 3.12+, reasons with Amazon Bedrock (Claude Sonnet by default, configurable), defines its infrastructure as code, and deploys with a single command. The framework, runtime, and IaC tool vary by agent:
 
-| Component | Technology | Purpose |
-|---|---|---|
-| Agent Framework | [Strands Agents](https://github.com/strands-agents/sdk-python) | Tool-using agent orchestration |
-| LLM | Amazon Bedrock (Claude Sonnet) | Reasoning and classification |
-| Runtime | Amazon Bedrock AgentCore Runtime | Managed agent execution environment |
-| Infrastructure | AWS CloudFormation (SAM transform) | Declarative deployment |
-| Deployment | Single `deploy.sh` script | One-command deploy, no additional tooling |
+| Agent | Agent Framework | Runtime | Infrastructure | Deploy |
+|---|---|---|---|---|
+| [AWS Health Notification Agent](health/aws-health-notification-agent/) | [Strands Agents](https://github.com/strands-agents/sdk-python) | Bedrock AgentCore Runtime + Lambda | CloudFormation (SAM transform) | `./deploy.sh` |
+| [MIO Agent](observability/mio-agent/) | Multi-agent coordinator on the Bedrock Converse API (boto3) | AWS Lambda + API Gateway | AWS CDK v2 (Python) | `cdk deploy` |
+| [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) | [Strands Agents](https://github.com/strands-agents/sdk-python) | Bedrock AgentCore Runtime (container) | AWS CDK v2 (Python) | `make deploy` |
 
-Individual agents may add domain-specific integrations (Jira, Slack, MCP servers, etc.) documented in their own README.
+Individual agents may add domain-specific integrations (Jira, Slack, AgentCore Memory, MCP servers, etc.) documented in their own README.
 
 ## Getting Started
 
-Each agent has its own README with deployment instructions. The general pattern is:
+Each agent has its own README with prerequisites and deployment instructions. Clone the repository, change into the agent folder, and run its one-command deploy:
 
 ```bash
-cd <domain>/<agent-name>/
-./deploy.sh
+git clone https://github.com/aws-samples/sample-ai-agents-for-operations.git
+cd sample-ai-agents-for-operations
 ```
 
-Start with the [AWS Health Notification Agent](health/aws-health-notification-agent/) — it demonstrates the full pattern including classification, impact analysis, multi-channel notifications, and human-approved remediation.
+Then pick one agent (all paths are relative to the repository root):
+
+```bash
+# Health — AWS Health Notification Agent
+(cd health/aws-health-notification-agent && ./deploy.sh)
+
+# Observability — MIO Agent
+(cd observability/mio-agent/infrastructure && cdk deploy)
+
+# Cloud Governance — Bedrock Quota Assistant
+(cd governance/bedrock-quota-assistant && make deploy)
+```
+
+Start with the [AWS Health Notification Agent](health/aws-health-notification-agent/) — it demonstrates the full pattern including classification, impact analysis, multi-channel notifications, and human-approved remediation. If you want a read-only agent to evaluate first, the [MIO Agent](observability/mio-agent/) never requests write permissions.
 
 ## Customise with Kiro IDE
 
-These sample agents are designed to be customised using [Kiro IDE](https://kiro.dev)'s **spec-driven development** workflow. Each agent includes a `.kiro/specs/` folder containing structured specification files that Kiro uses to understand the agent's architecture and guide your modifications.
+These sample agents are designed to be customised using [Kiro IDE](https://kiro.dev)'s **spec-driven development** workflow. The [AWS Health Notification Agent](health/aws-health-notification-agent/) and [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) ship with a `.kiro/specs/` folder containing structured specification files that Kiro uses to understand the agent's architecture and guide your modifications. Agents without specs can still be customised — Kiro will generate specs from the existing code.
 
 ```
 <agent>/.kiro/specs/
@@ -119,6 +140,8 @@ You don't need to write specs manually — Kiro builds them from your natural la
 | Add a new remediation action | "Support RDS engine upgrades with the same approval flow as EKS" |
 | Integrate with a different ticketing system | "Replace Jira with ServiceNow for ticket creation" |
 | Add team routing by new criteria | "Route tickets by AWS resource tag 'Team' in addition to OU" |
+| Reweight an assessment score | "Weight distributed tracing at 30% in the Observability Maturity Score" |
+| Extend quota coverage to another service | "Check SageMaker endpoint quotas alongside Bedrock quotas" |
 
 Kiro uses the existing specs as architectural context — it understands how the current integrations work and generates changes that fit the established patterns.
 
