@@ -1,0 +1,35 @@
+# DART Agent — Pinned Python Dependencies
+# Python 3.12+
+# Last updated: 2026-09-07
+
+# ── AWS SDK ───────────────────────────────────────────────────────────────────
+boto3==1.35.36
+botocore==1.35.36
+
+# ── Strands Agents SDK ────────────────────────────────────────────────────────
+strands-agents==0.1.6
+strands-agents-tools==0.1.6
+
+# ── Data processing ───────────────────────────────────────────────────────────
+polars==1.9.0
+pyarrow==17.0.0
+
+# ── Tokenisation ─────────────────────────────────────────────────────────────
+tiktoken==0.8.0
+
+# ── Deduplication ─────────────────────────────────────────────────────────────
+datasketch==1.6.5
+
+# ── Encoding detection ────────────────────────────────────────────────────────
+chardet==5.2.0
+
+# ── HTTP ─────────────────────────────────────────────────────────────────────
+# Upgraded from 2.2.3 — CVE-2025-66418, CVE-2025-66471, CVE-2026-21441
+# (decompression DoS attacks, all fixed in 2.6+; using 2.7.0 latest stable)
+urllib3==2.7.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dateutil==2.9.0.post0
+
+# ── Dev / test (not installed in production image) ───────────────────────────
+# Install with: pip install -r requirements-dev.txt

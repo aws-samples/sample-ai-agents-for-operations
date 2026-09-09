@@ -1,0 +1,20 @@
+# DART Agent — Development & Test Dependencies
+# Install: pip install -r requirements.txt -r requirements-dev.txt
+
+# Test runner
+pytest==8.3.3
+pytest-cov==6.0.0
+pytest-asyncio==0.24.0
+
+# Mocking
+pytest-mock==3.14.0
+
+# Linting & formatting
+ruff==0.7.1
+mypy==1.13.0
+
+# Type stubs
+boto3-stubs[bedrock,bedrock-runtime,comprehend,s3,dynamodb,secretsmanager]==1.35.36
+
+# Security scanning
+pip-audit==2.7.3

@@ -1,0 +1,155 @@
+{
+  "schema": "threat-composer-1.0",
+  "generatedBy": "STRIDE Threat Modeler (manual fallback — threat-modeling MCP server not available in session)",
+  "application": {
+    "name": "DART Agent",
+    "description": "Dataset Audit & Readiness for Training — Strands-based AI agent that performs pre-flight validation of LLM fine-tuning datasets. Runs on Amazon ECS Fargate, uses Amazon Bedrock for inference and narrative generation, and Amazon Comprehend for PII detection.",
+    "architecture": {
+      "compute": "Amazon ECS Fargate (private subnet, NAT egress)",
+      "model": "Amazon Bedrock (Claude Sonnet 4 default; Haiku, Nova Pro allowed)",
+      "pii": "Amazon Comprehend DetectPiiEntities",
+      "storage": "Amazon S3 output bucket (KMS, versioned, TLS-enforced, public access blocked), DynamoDB audit trail (CMK SSE, PITR, TTL)",
+      "iam": "Least-privilege task role — read-only on customer data, write only to agent-managed resources",
+      "network": "VPC with public/private subnets, S3 + DynamoDB gateway endpoints, 1 NAT gateway",
+      "encryption": "Customer-managed KMS key with rotation enabled"
+    }
+  },
+  "assumptions": [
+    "Datasets analysed may contain sensitive/PII content owned by the customer.",
+    "The agent is invoked by authenticated internal users or an upstream service; the ECS task itself has no public ingress in the provided stack.",
+    "Dataset content is treated as untrusted input.",
+    "Original datasets are never mutated; all fixes/redactions write new files."
+  ],
+  "threats": [
+    {
+      "id": "S-1",
+      "category": "Spoofing",
+      "severity": "MEDIUM",
+      "title": "No authentication layer defined for the agent invocation entrypoint",
+      "component": "src/dart-agent/agent.py (lambda_handler / run_preflight)",
+      "description": "The handler accepts a 'message' and 'run_id' with no caller identity verification, authorization, or ingress control in the CDK stack (no ALB/API Gateway/Cognito). A spoofed or unauthorized caller reaching the task could drive dataset analysis against arbitrary S3 paths.",
+      "mitigation": "Front the agent with an authenticated ingress (Amazon Cognito / IAM auth / API Gateway) before public/production use. Validate caller identity and scope requests. Document that the sample ships without ingress auth and must be added by the deployer.",
+      "status": "unmitigated"
+    },
+    {
+      "id": "S-2",
+      "category": "Spoofing",
+      "severity": "LOW",
+      "title": "run_id is caller-supplied and used as audit partition key",
+      "component": "src/dart-agent/agent.py, DynamoDB audit table (run_id partition key)",
+      "description": "run_id is taken from the event without validation, so a caller could supply a colliding or forged run_id and overwrite/pollute another run's audit records.",
+      "mitigation": "Generate run_id server-side (uuid) and ignore caller-supplied values, or namespace by authenticated principal. Validate format if accepted.",
+      "status": "partially-mitigated"
+    },
+    {
+      "id": "T-1",
+      "category": "Tampering",
+      "severity": "HIGH",
+      "title": "S3 path / path traversal on dataset_path is not validated",
+      "component": "src/dart-agent/tools/profile_dataset.py (_download_s3_to_tmp), all tool loaders",
+      "description": "dataset_path was passed unchecked to boto3 S3 download and Polars local loaders. A local path (e.g. ../../etc/...) or arbitrary s3://bucket/key could be read.",
+      "mitigation": "RESOLVED: added tools/_validation.py (validate_dataset_path/validate_s3_uri/validate_local_path) wired into profile_dataset, detect_duplicates, scan_pii, apply_safe_fixes, check_training_viability. Enforces well-formed S3 bucket names, blocks traversal segments, applies optional ALLOWED_S3_BUCKETS/ALLOWED_S3_PREFIXES allowlists, confines local paths to ALLOWED_LOCAL_BASE_DIR when set, and derives the temp filename safely via Path(key).name.",
+      "status": "mitigated"
+    },
+    {
+      "id": "T-2",
+      "category": "Tampering",
+      "severity": "MEDIUM",
+      "title": "Prompt injection via dataset-derived content in narrative generation",
+      "component": "src/dart-agent/tools/generate_preflight_report.py (_call_bedrock_narrative)",
+      "description": "Findings titles/details (partly derived from dataset column names and values) are embedded into the Bedrock prompt. Malicious dataset content could attempt to steer the narrative output. Impact is limited (narrative is advisory text, not executed), but injection could produce misleading reports.",
+      "mitigation": "Keep dataset-derived strings inside clearly delimited, structured JSON (already partly done); avoid interpolating raw record values into the prompt; validate/escape column names; consider Amazon Bedrock Guardrails on the narrative call.",
+      "status": "partially-mitigated"
+    },
+    {
+      "id": "T-3",
+      "category": "Tampering",
+      "severity": "LOW",
+      "title": "Docker base image is a public image without pinned digest",
+      "component": "Dockerfile (FROM base image)",
+      "description": "Originally used an unpinned public Docker Hub tag, exposing the build to upstream tag mutation / supply-chain risk.",
+      "mitigation": "RESOLVED: base image now sourced from AWS Public ECR (public.ecr.aws/docker/library/python:3.12-slim) and pinned by SHA256 digest (@sha256:78387bc3...). apt-get clean added; HEALTHCHECK converted to JSON/exec form; pip pinned (24.3.1). For production, consider hosting the base image in a private registry you control.",
+      "status": "mitigated"
+    },
+    {
+      "id": "R-1",
+      "category": "Repudiation",
+      "severity": "LOW",
+      "title": "Audit trail table exists but is not written on every action path",
+      "component": "infra DynamoDB audit table; src/dart-agent/agent.py",
+      "description": "A DynamoDB audit table (run_id, timestamp, ttl) is provisioned and the task role can write it, but the agent code logs to stdout/CloudWatch rather than demonstrably persisting per-action audit records to the table. Actions (e.g., PII redaction, safe fixes) may lack a durable, tamper-evident audit record.",
+      "mitigation": "Persist structured audit events (who/what/when, tool, dataset, record counts) to the audit table for each tool invocation. CloudWatch logs are encrypted with the CMK; consider log retention/immutability for the compliance use case.",
+      "status": "partially-mitigated"
+    },
+    {
+      "id": "I-1",
+      "category": "Information Disclosure",
+      "severity": "HIGH",
+      "title": "PII / affected-record samples surfaced in tool output and reports",
+      "component": "src/dart-agent/tools/scan_pii.py (affected_record_sample), generate_preflight_report.py",
+      "description": "scan_pii returns per-record samples (record index, column, entity types) and reports embed finding detail. While raw PII values are not returned, indices+columns of PII-bearing records plus narrative text are written to the S3 output bucket and CloudWatch. If bucket/log access is broader than the data owner, this leaks the location/shape of sensitive records.",
+      "mitigation": "Restrict S3 output bucket and CloudWatch log access to the data owner via least-privilege resource policies; avoid persisting record-level PII locators unless needed; the design already avoids sending raw content externally and does not return PII values — preserve that. Enable Amazon Bedrock Guardrails PII handling on the narrative call.",
+      "status": "partially-mitigated"
+    },
+    {
+      "id": "I-2",
+      "category": "Information Disclosure",
+      "severity": "MEDIUM",
+      "title": "Temp files written to /tmp are not explicitly cleaned up",
+      "component": "src/dart-agent/tools/profile_dataset.py (_download_s3_to_tmp → /tmp/dart_*)",
+      "description": "Downloaded customer datasets are written to the container's /tmp and not deleted after profiling. On a reused/long-lived task, residual sensitive data persists on local ephemeral storage.",
+      "mitigation": "RESOLVED: profile_dataset now downloads via tempfile.mkdtemp() (0700, unpredictable name) and deletes the temp directory in a finally block after processing. Closes bandit B108.",
+      "status": "mitigated"
+    },
+    {
+      "id": "I-3",
+      "category": "Information Disclosure",
+      "severity": "LOW",
+      "title": "Raw exception strings returned to caller",
+      "component": "src/dart-agent/agent.py (lambda_handler error path returns str(e))",
+      "description": "The handler returns str(e) in the 500 response, which can leak internal paths, bucket names, or stack details to the caller.",
+      "mitigation": "Return a generic error message + correlation id to callers; log full detail server-side only.",
+      "status": "unmitigated"
+    },
+    {
+      "id": "D-1",
+      "category": "Denial of Service",
+      "severity": "MEDIUM",
+      "title": "Unbounded dataset size / per-record processing and Comprehend call volume",
+      "component": "profile_dataset.py, detect_duplicates.py (MinHash O(n)), scan_pii.py (per-record Comprehend calls)",
+      "description": "No size/record-count limits before loading full datasets into memory (Polars to_dicts) and running per-record MinHash and per-record Comprehend calls (batch loop, one call per text per record). A very large or adversarial dataset can exhaust memory/CPU (8GB/4vCPU task) and generate large Amazon Comprehend spend / throttling.",
+      "mitigation": "Enforce max file size and max record count; stream/sample for profiling; batch Comprehend properly and add concurrency/rate limits and cost guardrails; set task-level timeouts.",
+      "status": "unmitigated"
+    },
+    {
+      "id": "D-2",
+      "category": "Denial of Service",
+      "severity": "LOW",
+      "title": "No retry/backoff on Bedrock/Comprehend transient errors",
+      "component": "generate_preflight_report.py, scan_pii.py",
+      "description": "AWS SDK calls catch ClientError and continue/degrade, but there is no exponential backoff on throttling. Under load this reduces availability of the report/PII features.",
+      "mitigation": "Add retry-with-backoff (botocore adaptive retries) for Bedrock and Comprehend calls.",
+      "status": "partially-mitigated"
+    },
+    {
+      "id": "E-1",
+      "category": "Elevation of Privilege",
+      "severity": "MEDIUM",
+      "title": "Comprehend and X-Ray IAM statements use Resource: \"*\"",
+      "component": "infra/lib/DartAgentStack.ts (ComprehendPiiDetection, XRayTracing statements)",
+      "description": "Two policy statements grant actions on Resource \"*\". Comprehend does not support resource-level scoping (documented, acceptable), but the broad grants slightly widen the task's blast radius if the role is assumed unexpectedly.",
+      "mitigation": "Keep Comprehend '*' (service limitation, documented). Scope X-Ray via conditions where feasible. Ensure the task role trust policy is limited to ecs-tasks and cannot be assumed elsewhere. Overall IAM is already read-only on customer data and write-scoped to agent-managed resources — good.",
+      "status": "mitigated"
+    },
+    {
+      "id": "E-2",
+      "category": "Elevation of Privilege",
+      "severity": "LOW",
+      "title": "apply_safe_fixes / scan_pii can write to caller-controlled output_path",
+      "component": "tools/apply_safe_fixes.py, tools/scan_pii.py",
+      "description": "output_path was caller-controlled and written via Polars writers with no directory allowlist, so local writes could target unexpected container paths.",
+      "mitigation": "RESOLVED: output_path now validated via validate_output_path in scan_pii and apply_safe_fixes, confining writes to ALLOWED_LOCAL_BASE_DIR when configured.",
+      "status": "mitigated"
+    }
+  ]
+}

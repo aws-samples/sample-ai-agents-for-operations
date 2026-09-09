@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+coverage_html/
+.tox/
+htmlcov/
+
+# Linting / type checking
+.ruff_cache/
+.mypy_cache/
+
+# CDK
+infra/node_modules/
+infra/cdk.out/
+infra/*.js
+infra/*.d.ts
+infra/tsconfig.tsbuildinfo
+
+# Docker
+.dockerignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.DS_Store
+
+# AWS credentials — NEVER commit these
+.aws/
+credentials
+*.pem
+*.key
+
+# Local config (Kiro local settings — not for public repo)
+.kiro/local/
+.kiro/dev-workflow/
+
+# Temp files
+tmp/
+*.tmp
+*_fixed.*
+*_redacted.*
+/tmp/
+
+# Secrets
+secrets.json
+*.secret
