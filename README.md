@@ -112,6 +112,30 @@ Then pick one agent (all paths are relative to the repository root):
 
 Note that the DART Agent deploys standing infrastructure including a NAT gateway (~$32/month), so run `cdk destroy` when you are not using it.
 
+### Clone a single agent
+
+The agents are independent, so you do not need the whole repository to deploy one. A sparse checkout fetches only the agent folder you name:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse \
+  https://github.com/aws-samples/sample-ai-agents-for-operations.git
+cd sample-ai-agents-for-operations
+git sparse-checkout set governance/dart-agent
+```
+
+Substitute any agent path — `health/aws-health-notification-agent`, `observability/mio-agent`, `governance/bedrock-quota-assistant`, `governance/dart-agent`. Add more later with `git sparse-checkout add <path>`.
+
+`--filter=blob:none` skips downloading file contents outside your chosen folder and `--sparse` starts with only root-level files checked out, so you never materialise the other agents. Root-level files (`README.md`, `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`) are always included. You keep a working git remote, so `git pull` picks up updates to your agent as normal.
+
+If you want the files without any git metadata — for a one-off evaluation, or inside a container build — extract the folder straight from a tarball:
+
+```bash
+curl -sL https://github.com/aws-samples/sample-ai-agents-for-operations/tarball/main \
+  | tar xz --strip-components=3 '*/governance/dart-agent'
+```
+
+This leaves the agent's contents in the current directory. Note that you cannot pull updates or tell which commit you are on, so prefer the sparse checkout for anything you plan to keep.
+
 Start with the [AWS Health Notification Agent](health/aws-health-notification-agent/) — it demonstrates the full pattern including classification, impact analysis, multi-channel notifications, and human-approved remediation. If you want a read-only agent to evaluate first, the [MIO Agent](observability/mio-agent/) never requests write permissions.
 
 ## Customise with Kiro IDE
