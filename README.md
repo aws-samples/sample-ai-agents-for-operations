@@ -14,6 +14,7 @@ Each agent is a self-contained, deployable solution that follows a common patter
 | **Health** | [AWS Health Notification Agent](health/aws-health-notification-agent/) | Classifies AWS Health Dashboard notifications, performs cross-account impact analysis, creates Jira tickets, and optionally executes approved remediation | Available |
 | **Observability** | [MIO Agent](observability/mio-agent/) | Continuously assesses monitoring and observability posture, scores maturity across 5 dimensions, and generates prioritized gap reports with implementation-ready fixes | Available |
 | **Cloud Governance** | [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) | Explains Amazon Bedrock usage, compares utilization against TPM/RPM quotas, and drafts or submits quota increase requests — via CLI or Slack | Available |
+| **Cloud Governance** | [DART Agent](governance/dart-agent/) | Pre-flight check for LLM fine-tuning datasets — profiles schema, detects duplicates, scans for PII, projects training cost, and returns a GO / NO-GO / GO WITH FIXES verdict with an auditable trail | Available |
 | **Cost Optimization** | _Coming soon_ | Identifies misconfigured architectures and underutilized resources, suggests optimization plans | Planned |
 | **Resiliency** | _Coming soon_ | Monitors resilience posture, recommends failover actions, validates recovery procedures | Planned |
 | **Security** | _Coming soon_ | Automated security posture assessment, compliance drift detection, remediation guidance | Planned |
@@ -27,7 +28,8 @@ sample-ai-agents-for-operations/
 ├── observability/                   # Monitoring & observability domain
 │   └── mio-agent/                       # Observability maturity assessment + gap reports
 ├── governance/                      # Cloud governance domain
-│   └── bedrock-quota-assistant/         # Bedrock quota analysis + increase requests
+│   ├── bedrock-quota-assistant/         # Bedrock quota analysis + increase requests
+│   └── dart-agent/                      # Fine-tuning dataset audit + GO/NO-GO verdict
 ├── cost-optimization/               # Cost & efficiency domain (planned)
 ├── resiliency/                      # Resilience & recovery domain (planned)
 ├── security/                        # Security posture domain (planned)
@@ -68,6 +70,7 @@ Where today's agents sit:
 - **MIO Agent** — L0–L1. Read-only by design; it reports findings and recommends fixes but holds no write permissions in your account.
 - **Bedrock Quota Assistant** — L1–L2. Analysis and drafting are autonomous; submitting a quota increase support case (its only mutating action) requires explicit user confirmation.
 - **AWS Health Notification Agent** — L1–L2. Classification and ticket creation are autonomous; remediation runs only after human approval.
+- **DART Agent** — L1–L2. Dataset analysis is read-only and autonomous; safe fixes are written to a new cleaned dataset (the original is never modified), and riskier fixes are queued for your approval.
 
 ## Technology Stack
 
@@ -78,6 +81,7 @@ Every agent is written in Python 3.12+, reasons with Amazon Bedrock (Claude Sonn
 | [AWS Health Notification Agent](health/aws-health-notification-agent/) | [Strands Agents](https://github.com/strands-agents/sdk-python) | Bedrock AgentCore Runtime + Lambda | CloudFormation (SAM transform) | `./deploy.sh` |
 | [MIO Agent](observability/mio-agent/) | Multi-agent coordinator on the Bedrock Converse API (boto3) | AWS Lambda + API Gateway | AWS CDK v2 (Python) | `cdk deploy` |
 | [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) | [Strands Agents](https://github.com/strands-agents/sdk-python) | Bedrock AgentCore Runtime (container) | AWS CDK v2 (Python) | `make deploy` |
+| [DART Agent](governance/dart-agent/) | [Strands Agents](https://github.com/strands-agents/sdk-python) | Amazon ECS Fargate task (container) | AWS CDK v2 (TypeScript) | `make deploy-staging` |
 
 Individual agents may add domain-specific integrations (Jira, Slack, AgentCore Memory, MCP servers, etc.) documented in their own README.
 
@@ -101,13 +105,18 @@ Then pick one agent (all paths are relative to the repository root):
 
 # Cloud Governance — Bedrock Quota Assistant
 (cd governance/bedrock-quota-assistant && make deploy)
+
+# Cloud Governance — DART Agent
+(cd governance/dart-agent && make setup && make deploy-staging)
 ```
+
+Note that the DART Agent deploys standing infrastructure including a NAT gateway (~$32/month), so run `cdk destroy` when you are not using it.
 
 Start with the [AWS Health Notification Agent](health/aws-health-notification-agent/) — it demonstrates the full pattern including classification, impact analysis, multi-channel notifications, and human-approved remediation. If you want a read-only agent to evaluate first, the [MIO Agent](observability/mio-agent/) never requests write permissions.
 
 ## Customise with Kiro IDE
 
-These sample agents are designed to be customised using [Kiro IDE](https://kiro.dev)'s **spec-driven development** workflow. The [AWS Health Notification Agent](health/aws-health-notification-agent/) and [Bedrock Quota Assistant](governance/bedrock-quota-assistant/) ship with a `.kiro/specs/` folder containing structured specification files that Kiro uses to understand the agent's architecture and guide your modifications. Agents without specs can still be customised — Kiro will generate specs from the existing code.
+These sample agents are designed to be customised using [Kiro IDE](https://kiro.dev)'s **spec-driven development** workflow. The [AWS Health Notification Agent](health/aws-health-notification-agent/), [Bedrock Quota Assistant](governance/bedrock-quota-assistant/), and [DART Agent](governance/dart-agent/) ship with a `.kiro/specs/` folder containing structured specification files that Kiro uses to understand the agent's architecture and guide your modifications. Agents without specs can still be customised — Kiro will generate specs from the existing code.
 
 ```
 <agent>/.kiro/specs/
@@ -142,6 +151,7 @@ You don't need to write specs manually — Kiro builds them from your natural la
 | Add team routing by new criteria | "Route tickets by AWS resource tag 'Team' in addition to OU" |
 | Reweight an assessment score | "Weight distributed tracing at 30% in the Observability Maturity Score" |
 | Extend quota coverage to another service | "Check SageMaker endpoint quotas alongside Bedrock quotas" |
+| Add a dataset quality check | "Add a toxicity check to the DART pre-flight report and include it in the score" |
 
 Kiro uses the existing specs as architectural context — it understands how the current integrations work and generates changes that fit the established patterns.
 

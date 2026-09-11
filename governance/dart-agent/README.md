@@ -217,7 +217,7 @@ charge** even when idle — tear the stack down (`cdk destroy`) when not in use 
 
 ```bash
 git clone https://github.com/aws-samples/sample-ai-agents-for-operations.git
-cd sample-ai-agents-for-operations/dart-agent
+cd sample-ai-agents-for-operations/governance/dart-agent
 make setup
 ```
 
