@@ -289,22 +289,77 @@ def build_agent() -> Agent:
     )
 
 
+# ── Report persistence ────────────────────────────────────────────────────────
+
+def _persist_report_to_s3(run_id: str, report_text: str) -> str | None:
+    """Write the pre-flight report to the agent-internal output bucket.
+
+    Best-effort: a failure to persist does not fail the run. Returns the S3
+    URI when written, otherwise None.
+    """
+    if not Config.OUTPUT_BUCKET:
+        logger.warning(json.dumps({
+            "event": "report_persist_skipped",
+            "reason": "OUTPUT_BUCKET not configured",
+            "run_id": run_id,
+        }))
+        return None
+
+    key = f"reports/{run_id}.md"
+    try:
+        client = boto3.client("s3", region_name=Config.AWS_REGION)
+        client.put_object(
+            Bucket=Config.OUTPUT_BUCKET,
+            Key=key,
+            Body=report_text.encode("utf-8"),
+            ContentType="text/markdown",
+        )
+        uri = f"s3://{Config.OUTPUT_BUCKET}/{key}"
+        logger.info(json.dumps({
+            "event": "report_persisted",
+            "run_id": run_id,
+            "s3_uri": uri,
+        }))
+        return uri
+    except Exception as e:
+        logger.warning(json.dumps({
+            "event": "report_persist_error",
+            "run_id": run_id,
+            "error": str(e),
+        }))
+        return None
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
 
-def run_preflight(user_message: str) -> str:
+def run_preflight(user_message: str, run_id: str | None = None) -> str:
     """
     Run the DART agent with a natural language request.
+
+    Generates a server-side run_id (unless one is supplied), runs the agent,
+    persists the report to the output bucket, and writes an audit record to the
+    DynamoDB audit trail (EU AI Act Article 10). Both persistence steps are
+    best-effort and never fail the run.
 
     Args:
         user_message: Natural language description of what to check,
             e.g. "Check s3://my-bucket/train.jsonl for fine-tuning llama3-70b"
+        run_id: Optional run identifier; generated if not provided.
 
     Returns:
         Agent response string
     """
+    run_id = run_id or f"dart-{uuid.uuid4().hex[:8]}"
     agent = build_agent()
     response = agent(user_message)
-    return str(response)
+    report_text = str(response)
+
+    # Persist the report and a compliance audit record. Both are best-effort so
+    # that observability/compliance failures never lose the analysis result.
+    _persist_report_to_s3(run_id, report_text)
+    write_audit_record(run_id=run_id, message=user_message, status="complete")
+
+    return report_text
 
 
 # ── Request handler ───────────────────────────────────────────────────────────
@@ -342,15 +397,14 @@ def handle_request(event: dict, context: Any = None) -> dict:
     }))
 
     try:
-        response = run_preflight(message)
+        # run_preflight handles report persistence + the audit-record write,
+        # using this run_id so the event and CLI paths behave identically.
+        response = run_preflight(message, run_id=run_id)
         logger.info(json.dumps({
             "event": "request_complete",
             "run_id": run_id,
             "success": True,
         }))
-        # Persist a tamper-evident audit record for this run (Article 10).
-        # Best-effort: a failure to write audit data does not fail the run.
-        write_audit_record(run_id=run_id, message=message, status="complete")
         return {
             "statusCode": 200,
             "run_id": run_id,
@@ -385,4 +439,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     user_input = " ".join(sys.argv[1:])
-    print(run_preflight(user_input))
+    cli_run_id = f"dart-{uuid.uuid4().hex[:8]}"
+    print(run_preflight(user_input, run_id=cli_run_id))
+    print(f"\n[run_id: {cli_run_id}]")

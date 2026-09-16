@@ -1,0 +1,24 @@
+{
+  "name": "dart-agent-infra",
+  "version": "1.0.0",
+  "description": "CDK infrastructure for the DART agent",
+  "private": true,
+  "bin": {
+    "dart-agent": "bin/dart-agent.ts"
+  },
+  "scripts": {
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.5.4"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.174.0",
+    "constructs": "^10.3.0",
+    "source-map-support": "^0.5.21"
+  }
+}

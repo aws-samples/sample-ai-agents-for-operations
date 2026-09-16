@@ -21,8 +21,11 @@ class Config:
     AWS_ACCOUNT_ID: str = os.environ.get("AWS_ACCOUNT_ID", "")
 
     # ── Bedrock ───────────────────────────────────────────────────────────────
+    # Newer Bedrock models (e.g. Claude Sonnet 4) require a cross-region
+    # inference profile ID (the "us." prefix) rather than the bare
+    # foundation-model ID, which is not invocable with on-demand throughput.
     MODEL_ID: str = os.environ.get(
-        "MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0"
+        "MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     MAX_TOKENS: int = int(os.environ.get("MAX_TOKENS", "4096"))
 
