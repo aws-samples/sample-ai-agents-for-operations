@@ -61,13 +61,40 @@ def _record_hash(record: dict) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# Response/target fields across the known fine-tuning schemas. The token-length
+# rule is applied to these fields only — short prompts, instructions, questions
+# or titles are legitimate and must NOT cause a record to be dropped.
+_RESPONSE_FIELDS = ("response", "completion", "output", "answer", "target")
+
+
 def _is_empty_record(record: dict, enc: tiktoken.Encoding) -> bool:
-    """Return True if any string field has fewer than MIN_RESPONSE_TOKENS tokens."""
+    """Return True if the record should be dropped as empty/insufficient.
+
+    A record is considered empty when:
+      - any string field is present but blank (whitespace-only), or
+      - a *response/target* field has fewer than MIN_RESPONSE_TOKENS tokens.
+
+    The token-length threshold is deliberately applied only to response-type
+    fields (see _RESPONSE_FIELDS). Short instructions/prompts/questions are
+    valid training signal and must not trigger removal.
+    """
+    # Drop records with a blank (whitespace-only) value in any string field.
     for v in record.values():
-        if isinstance(v, str) and v.strip():
-            tokens = len(enc.encode(v))
-            if tokens < Config.MIN_RESPONSE_TOKENS:
-                return True
+        if isinstance(v, str) and v == "":
+            return True
+        if isinstance(v, str) and not v.strip():
+            return True
+
+    # Apply the minimum-token rule to response-type fields only.
+    present_response_fields = [
+        k for k in record
+        if k.lower() in _RESPONSE_FIELDS and isinstance(record[k], str)
+    ]
+    for k in present_response_fields:
+        value = record[k]
+        if value.strip() and len(enc.encode(value)) < Config.MIN_RESPONSE_TOKENS:
+            return True
+
     return False
 
 
