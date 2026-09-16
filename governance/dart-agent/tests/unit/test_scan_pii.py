@@ -95,18 +95,32 @@ class TestScanPiiWithMock:
 
     @patch("tools.scan_pii.boto3.client")
     def test_pii_detected(self, mock_boto3_client, sample_jsonl_with_pii):
-        """Mock Comprehend to return PII entities."""
+        """Mock Comprehend's BatchDetectPiiEntities to return PII entities.
+
+        scan_pii calls batch_detect_pii_entities(TextList=...) once per text
+        column (here: 'instruction' and 'response'), each batch holding the 3
+        records. The response uses a ResultList whose items carry their batch
+        position via the 'Index' field.
+        """
         mock_comprehend = MagicMock()
         mock_boto3_client.return_value = mock_comprehend
 
-        mock_comprehend.detect_pii_entities.side_effect = [
-            {"Entities": [{"BeginOffset": 12, "EndOffset": 30, "Type": "EMAIL"}]},
-            {"Entities": []},
-            {"Entities": []},
-            {"Entities": []},
-            {"Entities": [{"BeginOffset": 10, "EndOffset": 22, "Type": "PHONE"}]},
-            {"Entities": []},
-        ]
+        def batch_side_effect(TextList, LanguageCode="en", **kwargs):
+            # Detect an EMAIL in any document that contains '@', and a PHONE in
+            # any document with a digit run — mirrors what Comprehend would find
+            # in the sample fixture without depending on column ordering.
+            result_list = []
+            for i, doc in enumerate(TextList):
+                entities = []
+                if "@" in doc:
+                    entities.append({"BeginOffset": 0, "EndOffset": 1, "Type": "EMAIL"})
+                if any(ch.isdigit() for ch in doc):
+                    entities.append({"BeginOffset": 0, "EndOffset": 1, "Type": "PHONE"})
+                if entities:
+                    result_list.append({"Index": i, "Entities": entities})
+            return {"ResultList": result_list, "ErrorList": []}
+
+        mock_comprehend.batch_detect_pii_entities.side_effect = batch_side_effect
 
         from tools.scan_pii import scan_pii
         result = scan_pii(sample_jsonl_with_pii)
@@ -118,7 +132,9 @@ class TestScanPiiWithMock:
         """Mock Comprehend to return no PII."""
         mock_comprehend = MagicMock()
         mock_boto3_client.return_value = mock_comprehend
-        mock_comprehend.detect_pii_entities.return_value = {"Entities": []}
+        mock_comprehend.batch_detect_pii_entities.return_value = {
+            "ResultList": [], "ErrorList": []
+        }
 
         from tools.scan_pii import scan_pii
         result = scan_pii(clean_jsonl)
@@ -129,7 +145,9 @@ class TestScanPiiWithMock:
     def test_result_has_required_keys(self, mock_boto3_client, clean_jsonl):
         mock_comprehend = MagicMock()
         mock_boto3_client.return_value = mock_comprehend
-        mock_comprehend.detect_pii_entities.return_value = {"Entities": []}
+        mock_comprehend.batch_detect_pii_entities.return_value = {
+            "ResultList": [], "ErrorList": []
+        }
 
         from tools.scan_pii import scan_pii
         result = scan_pii(clean_jsonl)

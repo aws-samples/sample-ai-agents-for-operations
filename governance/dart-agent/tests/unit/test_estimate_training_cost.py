@@ -24,10 +24,18 @@ class TestSageMakerCost:
         assert result["provider"] == "Amazon SageMaker (self-managed)"
         assert result["num_nodes"] == 4
 
-    def test_more_nodes_costs_more(self):
+    def test_more_nodes_finish_faster_same_total_cost(self):
+        # The cost model assumes linear scaling: N nodes finish the job N times
+        # faster, so total node-hours (and therefore cost) stay constant while
+        # wall-clock time drops. This guards that intended behaviour.
         cost_1 = _sagemaker_cost(100_000_000, "ml.p4d.24xlarge", 1, 3)
         cost_4 = _sagemaker_cost(100_000_000, "ml.p4d.24xlarge", 4, 3)
-        assert cost_4["estimated_cost_usd"] > cost_1["estimated_cost_usd"]
+        # More nodes → fewer wall-clock hours.
+        assert cost_4["estimated_hours"] < cost_1["estimated_hours"]
+        # Total cost is independent of node count under linear scaling.
+        assert cost_4["estimated_cost_usd"] == pytest.approx(
+            cost_1["estimated_cost_usd"], rel=0.01
+        )
 
     def test_more_epochs_costs_more(self):
         cost_1 = _sagemaker_cost(100_000_000, "ml.g5.xlarge", 1, 1)
