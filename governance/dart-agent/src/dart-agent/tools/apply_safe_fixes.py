@@ -25,8 +25,10 @@ from typing import Any
 import polars as pl
 import tiktoken
 
+import shutil
+
 from config import Config
-from tools._validation import validate_dataset_path, validate_output_path
+from tools._validation import resolve_to_local_file, validate_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -134,16 +136,20 @@ def apply_safe_fixes(
         empty_records_removed, encoding_issues_fixed, output_path, duration_ms
     """
     start_ts = time.time()
-    dataset_path = validate_dataset_path(dataset_path)  # threat T-1
+    # Resolve S3 or local input to a local file (threat T-1) so safe-fixes can
+    # run on an s3:// dataset. Keep the original path only to derive a sensible
+    # default output filename below.
+    original_path = dataset_path
+    local_path, is_tmp = resolve_to_local_file(dataset_path)
     if output_path:
         output_path = validate_output_path(output_path)  # threat E-2
     logger.info(json.dumps({
         "event": "tool_start",
         "tool": "apply_safe_fixes",
-        "dataset_path": dataset_path,
+        "dataset_path": original_path,
     }))
 
-    df = _load_dataframe(dataset_path)
+    df = _load_dataframe(str(local_path))
     records_before = len(df)
     enc = tiktoken.get_encoding("cl100k_base")
     text_cols = [c for c in df.columns if df[c].dtype in (pl.Utf8, pl.String)]
@@ -184,10 +190,14 @@ def apply_safe_fixes(
 
     records_after = len(clean_rows)
 
-    # Derive output path
+    # Derive output path. For a local input, write the cleaned copy alongside it
+    # with a _fixed suffix. For an S3 input (no explicit output_path), base the
+    # name on the object's filename and write it beside the temp download.
     if not output_path:
-        p = Path(dataset_path)
-        output_path = str(p.parent / f"{p.stem}_fixed{p.suffix}")
+        base = Path(original_path.split("/")[-1]) if original_path.startswith("s3://") else Path(original_path)
+        stem = base.stem or "dataset"
+        suffix = base.suffix or ".jsonl"
+        output_path = str(local_path.parent / f"{stem}_fixed{suffix}")
 
     if clean_rows:
         clean_df = pl.from_dicts(clean_rows)
@@ -195,6 +205,12 @@ def apply_safe_fixes(
     else:
         # Write empty file with same schema
         pl.from_dicts([{c: None for c in df.columns}]).clear().write_ndjson(output_path)
+
+    # The input temp download (if any) is no longer needed; the cleaned output
+    # lives in the same temp dir for S3 inputs, so only remove the input temp
+    # dir when we did NOT write our output into it.
+    if is_tmp and not str(output_path).startswith(str(local_path.parent)):
+        shutil.rmtree(local_path.parent, ignore_errors=True)
 
     duration_ms = round((time.time() - start_ts) * 1000, 1)
 

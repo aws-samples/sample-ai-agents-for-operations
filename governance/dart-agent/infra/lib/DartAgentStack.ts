@@ -183,12 +183,13 @@ export class DartAgentStack extends cdk.Stack {
     );
 
     // READ-ONLY: Amazon Comprehend PII detection (no resource-level permissions).
-    // The agent uses the batch API (BatchDetectPiiEntities, up to 25 docs/call).
+    // Comprehend has no batch PII API; the agent calls DetectPiiEntities per
+    // document, so the required action is comprehend:DetectPiiEntities.
     taskRole.addToPolicy(
       new iam.PolicyStatement({
         sid: "ComprehendPiiDetection",
         effect: iam.Effect.ALLOW,
-        actions: ["comprehend:BatchDetectPiiEntities"],
+        actions: ["comprehend:DetectPiiEntities"],
         resources: ["*"], // Comprehend does not support resource-level permissions
       })
     );

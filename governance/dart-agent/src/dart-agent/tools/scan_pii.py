@@ -22,12 +22,27 @@ import boto3
 import polars as pl
 from botocore.exceptions import ClientError
 
+import shutil
+
 from config import Config
-from tools._validation import validate_dataset_path, validate_output_path
+from tools._validation import resolve_to_local_file, validate_output_path
 
 logger = logging.getLogger(__name__)
 
-_BATCH_SIZE = 25  # Amazon Comprehend batch limit
+# Amazon Comprehend's synchronous PII API (DetectPiiEntities) processes ONE
+# document per call — there is no batch PII API. We chunk only to bound the
+# number of documents processed per progress-log line.
+_CHUNK_SIZE = 25
+# Comprehend DetectPiiEntities max bytes per document (UTF-8). Truncate defensively.
+_MAX_DOC_BYTES = 4900
+
+
+class PiiScanUnavailable(RuntimeError):
+    """Raised when the PII scan cannot run (e.g. Comprehend access denied).
+
+    Surfaced to the caller so the report never silently claims "no PII" when the
+    scan did not actually execute — a false "clean" is the dangerous failure mode.
+    """
 
 
 def _load_dataframe(dataset_path: str) -> pl.DataFrame:
@@ -48,59 +63,61 @@ def _get_text_columns(df: pl.DataFrame) -> list[str]:
     return [c for c in df.columns if df[c].dtype in (pl.Utf8, pl.String)]
 
 
-def _call_comprehend_batch(
+def _scan_texts_for_pii(
     client: Any,
     texts: list[str],
     language_code: str = "en",
 ) -> list[list[dict]]:
     """
-    Call Amazon Comprehend BatchDetectPiiEntities for a batch of texts.
+    Detect PII in a list of texts using Amazon Comprehend DetectPiiEntities.
 
-    Uses the batch API (up to 25 documents per call) so the number of API
-    calls scales with dataset_size / 25 rather than one call per record.
-    Returns a list of PII entity lists, one per input text (same order/length
-    as the input). Empty/blank inputs are skipped and yield an empty list.
+    Comprehend has no batch PII operation, so each non-empty document is scanned
+    with a single DetectPiiEntities call. Returns a list of PII-entity lists, one
+    per input text (same order/length as the input); empty/blank inputs yield [].
 
-    Note: BatchDetectPiiEntities requires 1–25 non-empty documents per call, so
-    we compact out blanks, send only the non-empty docs, and map results back
-    to their original positions.
+    Raises:
+        PiiScanUnavailable: if Comprehend rejects the request in a way that means
+            the scan did not run (e.g. AccessDenied, unsupported region). This is
+            raised rather than swallowed so the caller never reports a false
+            "no PII" when the scan never actually executed.
     """
     results: list[list[dict]] = [[] for _ in texts]
 
-    # Comprehend has a per-document byte limit — truncate defensively.
-    non_empty: list[tuple[int, str]] = [
-        (i, t[:4900]) for i, t in enumerate(texts) if t and t.strip()
-    ]
-    if not non_empty:
-        return results
-
-    original_indices = [i for i, _ in non_empty]
-    documents = [t for _, t in non_empty]
-
-    try:
-        response = client.batch_detect_pii_entities(
-            TextList=documents,
-            LanguageCode=language_code,
-        )
-        # ResultList entries carry their position via the "Index" field.
-        for item in response.get("ResultList", []):
-            local_idx = item.get("Index")
-            if local_idx is None or local_idx >= len(original_indices):
-                continue
-            results[original_indices[local_idx]] = item.get("Entities", [])
-        # Per-document errors, if any, are logged but non-fatal.
-        for err in response.get("ErrorList", []):
+    for i, text in enumerate(texts):
+        if not text or not text.strip():
+            continue
+        document = text.encode("utf-8")[:_MAX_DOC_BYTES].decode("utf-8", errors="ignore")
+        try:
+            response = client.detect_pii_entities(
+                Text=document,
+                LanguageCode=language_code,
+            )
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            # AccessDenied / auth / region-support failures mean the scan cannot
+            # run at all — surface it instead of returning a misleading "clean".
+            if code in {
+                "AccessDeniedException",
+                "UnrecognizedClientException",
+                "InvalidRequestException",
+                "UnsupportedLanguageException",
+            }:
+                logger.warning(json.dumps({
+                    "event": "comprehend_scan_unavailable",
+                    "error_code": code,
+                    "error": str(e),
+                }))
+                raise PiiScanUnavailable(
+                    f"Comprehend DetectPiiEntities failed: {code}"
+                ) from e
+            # Any other per-document error: log and treat that one doc as no-hit.
             logger.warning(json.dumps({
-                "event": "comprehend_batch_item_error",
-                "batch_index": err.get("Index"),
-                "error_code": err.get("ErrorCode"),
+                "event": "comprehend_document_error",
+                "index": i,
+                "error_code": code,
             }))
-    except ClientError as e:
-        logger.warning(json.dumps({
-            "event": "comprehend_batch_error",
-            "error": str(e),
-            "batch_size": len(documents),
-        }))
+            continue
+        results[i] = response.get("Entities", [])
     return results
 
 
@@ -147,7 +164,10 @@ def scan_pii(
         affected_record_sample, redacted_output_path (if applicable), duration_ms
     """
     start_ts = time.time()
-    dataset_path = validate_dataset_path(dataset_path)  # threat T-1
+    # Resolve S3 or local input to a local file (threat T-1). This is what lets
+    # the Amazon Comprehend PII scan run on an s3:// dataset, not just a local
+    # one — previously an s3:// path could not be scanned for PII at all.
+    local_path, is_tmp = resolve_to_local_file(dataset_path)
     if output_path:
         output_path = validate_output_path(output_path)  # threat E-2
     strategy = redaction_strategy or Config.PII_REDACTION_STRATEGY
@@ -160,7 +180,11 @@ def scan_pii(
         "produce_redacted_copy": produce_redacted_copy,
     }))
 
-    df = _load_dataframe(dataset_path)
+    try:
+        df = _load_dataframe(str(local_path))
+    finally:
+        if is_tmp:
+            shutil.rmtree(local_path.parent, ignore_errors=True)
     total = len(df)
     text_cols = _get_text_columns(df)
 
@@ -173,33 +197,41 @@ def scan_pii(
     # Per-column, per-record PII findings
     col_pii: dict[str, dict[int, list[dict]]] = {c: {} for c in text_cols}
 
-    for col in text_cols:
-        col_data = df[col].fill_null("").to_list()
-        # Process in batches
-        for batch_start in range(0, total, _BATCH_SIZE):
-            batch = col_data[batch_start: batch_start + _BATCH_SIZE]
-            batch_results = _call_comprehend_batch(comprehend, batch)
-            for local_idx, entities in enumerate(batch_results):
-                global_idx = batch_start + local_idx
-                # Filter to configured entity types only
-                filtered = [
-                    e for e in entities
-                    if e.get("Type") in Config.PII_ENTITY_TYPES
-                ]
-                if filtered:
-                    col_pii[col][global_idx] = filtered
-                    affected_records.add(global_idx)
-                    for e in filtered:
-                        t = e.get("Type", "UNKNOWN")
-                        entity_type_counts[t] = entity_type_counts.get(t, 0) + 1
-                    if len(affected_sample) < 10:
-                        affected_sample.append({
-                            "record_index": global_idx,
-                            "column": col,
-                            "entity_types": list({e["Type"] for e in filtered}),
-                        })
-                    if strategy == "remove":
-                        records_to_remove.add(global_idx)
+    scan_error: str | None = None
+    try:
+        for col in text_cols:
+            col_data = df[col].fill_null("").to_list()
+            for chunk_start in range(0, total, _CHUNK_SIZE):
+                chunk = col_data[chunk_start: chunk_start + _CHUNK_SIZE]
+                chunk_results = _scan_texts_for_pii(comprehend, chunk)
+                for local_idx, entities in enumerate(chunk_results):
+                    global_idx = chunk_start + local_idx
+                    filtered = [
+                        e for e in entities
+                        if e.get("Type") in Config.PII_ENTITY_TYPES
+                    ]
+                    if filtered:
+                        col_pii[col][global_idx] = filtered
+                        affected_records.add(global_idx)
+                        for e in filtered:
+                            t = e.get("Type", "UNKNOWN")
+                            entity_type_counts[t] = entity_type_counts.get(t, 0) + 1
+                        if len(affected_sample) < 10:
+                            affected_sample.append({
+                                "record_index": global_idx,
+                                "column": col,
+                                "entity_types": list({e["Type"] for e in filtered}),
+                            })
+                        if strategy == "remove":
+                            records_to_remove.add(global_idx)
+    except PiiScanUnavailable as e:
+        # The scan could not run. Record the error so the caller/report states
+        # the scan did NOT complete, rather than implying the data is clean.
+        scan_error = str(e)
+        logger.warning(json.dumps({
+            "event": "pii_scan_incomplete",
+            "reason": scan_error,
+        }))
 
     pii_found = len(entity_type_counts) > 0
     affected_count = len(affected_records)
@@ -241,6 +273,8 @@ def scan_pii(
 
     result = {
         "pii_found": pii_found,
+        "scan_complete": scan_error is None,
+        "scan_error": scan_error,
         "total_records": total,
         "affected_record_count": affected_count,
         "entity_type_counts": entity_type_counts,

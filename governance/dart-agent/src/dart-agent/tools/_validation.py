@@ -23,10 +23,18 @@ non-leaky error rather than performing the read.
 
 from __future__ import annotations
 
-import re
+import json
+import logging
+import tempfile
 from pathlib import Path
+import re
+
+import boto3
+from botocore.exceptions import ClientError
 
 from config import Config
+
+logger = logging.getLogger(__name__)
 
 _S3_URI_RE = re.compile(r"^s3://(?P<bucket>[^/]+)/(?P<key>.+)$")
 # S3 bucket naming: 3-63 chars, lowercase letters, digits, dots, hyphens.
@@ -128,3 +136,50 @@ def validate_output_path(output_path: str) -> str:
         if not resolved.is_relative_to(base_resolved):
             _reject(f"output path escapes the allowed base directory {base_resolved}")
     return str(resolved)
+
+
+def download_s3_to_tmp(s3_path: str) -> Path:
+    """
+    Download an S3 object to a securely created temporary file and return it.
+
+    Validates the S3 URI (allowlist + traversal guard) first, then downloads to
+    an unpredictable, permission-restricted temp directory (tempfile.mkdtemp,
+    not a hardcoded /tmp path — avoids bandit B108). The caller owns cleanup of
+    the returned path.
+    """
+    bucket, key = validate_s3_uri(s3_path)
+    s3 = boto3.client("s3", region_name=Config.AWS_REGION)
+    tmp_dir = tempfile.mkdtemp(prefix="dart_")
+    safe_name = Path(key).name or "dataset"
+    local_path = Path(tmp_dir) / safe_name
+    try:
+        s3.download_file(bucket, key, str(local_path))
+    except ClientError as e:
+        logger.warning(json.dumps({
+            "event": "s3_download_error",
+            "bucket": bucket,
+            "key": key,
+            "error": str(e),
+        }))
+        raise
+    return local_path
+
+
+def resolve_to_local_file(dataset_path: str) -> tuple[Path, bool]:
+    """
+    Resolve any caller-supplied dataset path to a readable LOCAL file.
+
+    - For an ``s3://`` URI: validates it and downloads the object to a temp
+      file, returning (local_path, True) — the True signals the caller that the
+      file is a temp download it should delete when finished.
+    - For a local path: validates it exists and is within the allowed base dir,
+      returning (resolved_path, False).
+
+    This lets every tool accept S3 or local input uniformly. Tools that only
+    operate on local files (dedup, PII scan, viability, safe-fixes) previously
+    could not process S3 datasets; routing through this helper fixes that so an
+    ``s3://`` dataset is analysed exactly like a local one.
+    """
+    if dataset_path and dataset_path.startswith("s3://"):
+        return download_s3_to_tmp(dataset_path), True
+    return validate_local_path(dataset_path, must_exist=True), False

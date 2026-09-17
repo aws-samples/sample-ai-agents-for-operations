@@ -20,8 +20,10 @@ from typing import Any
 import polars as pl
 import tiktoken
 
+import shutil
+
 from config import Config
-from tools._validation import validate_dataset_path
+from tools._validation import resolve_to_local_file
 
 logger = logging.getLogger(__name__)
 
@@ -172,22 +174,33 @@ def check_training_viability(
         overall_viable, blocking_issues, warnings, duration_ms
     """
     start_ts = time.time()
-    dataset_path = validate_dataset_path(dataset_path)  # threat T-1
+    # Resolve S3 or local inputs to local files (threat T-1) so viability checks
+    # run on s3:// datasets, not just local ones.
+    local_path, ds_tmp = resolve_to_local_file(dataset_path)
+    val_local: str | None = None
+    val_tmp = False
     if validation_path:
-        validation_path = validate_dataset_path(validation_path)
+        _vp, val_tmp = resolve_to_local_file(validation_path)
+        val_local = str(_vp)
     logger.info(json.dumps({
         "event": "tool_start",
         "tool": "check_training_viability",
         "target_model": target_model,
     }))
 
-    df = _load_dataframe(dataset_path)
-    enc = _get_tokenizer(target_model)
+    try:
+        df = _load_dataframe(str(local_path))
+        enc = _get_tokenizer(target_model)
 
-    token_budget = _check_token_budget(df, target_model, enc)
-    schema_check = _check_schema_completeness(df)
-    size_check = _check_minimum_size(df, target_model)
-    leakage_check = _check_train_val_leakage(dataset_path, validation_path)
+        token_budget = _check_token_budget(df, target_model, enc)
+        schema_check = _check_schema_completeness(df)
+        size_check = _check_minimum_size(df, target_model)
+        leakage_check = _check_train_val_leakage(str(local_path), val_local)
+    finally:
+        if ds_tmp:
+            shutil.rmtree(local_path.parent, ignore_errors=True)
+        if val_tmp and val_local:
+            shutil.rmtree(Path(val_local).parent, ignore_errors=True)
 
     # Determine blocking issues and warnings
     blocking_issues = []
