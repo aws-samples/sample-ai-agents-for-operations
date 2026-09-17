@@ -86,6 +86,23 @@ def _build_findings(
             "auto_fixable": False,
             "record_count": pii["affected_record_count"],
         })
+    elif pii.get("scan_complete") is False:
+        # The PII scan did not actually run (e.g. Comprehend access denied).
+        # Surface this as a blocker — a false "clean" is the dangerous outcome.
+        findings.append({
+            "id": "PII-000",
+            "severity": "critical",
+            "category": "PII / Compliance",
+            "title": "PII scan did NOT complete — dataset is NOT verified PII-clean",
+            "detail": (
+                f"The PII scan could not run ({pii.get('scan_error', 'unknown error')}). "
+                f"Do not treat this dataset as free of PII. Resolve access to the PII "
+                f"scanning service and re-run before training."
+            ),
+            "action": "Fix PII-scan access and re-run; do not train assuming the data is clean.",
+            "auto_fixable": False,
+            "record_count": None,
+        })
 
     # Train/val leakage — critical
     leakage = viability.get("leakage_check", {})
@@ -225,29 +242,67 @@ def _call_bedrock_narrative(
     """Generate a concise human-readable narrative using Amazon Bedrock."""
     bedrock = boto3.client("bedrock-runtime", region_name=Config.AWS_REGION)
 
+    # Build a compact findings payload the model can render faithfully.
+    findings_payload = json.dumps(
+        [
+            {
+                "severity": f["severity"],
+                "title": f["title"],
+                "detail": f.get("detail", ""),
+                "action": f["action"],
+                "auto_fixable": bool(f.get("auto_fixable")),
+            }
+            for f in findings[:8]
+        ],
+        indent=2,
+    )
+
     prompt = f"""You are DART — Dataset Audit & Readiness for Training — an expert pre-flight agent for LLM training data.
 
-Generate a concise, professional pre-flight summary (max 300 words) for the following analysis results.
-Be direct, specific, and cost-aware. Lead with the recommendation and top issues.
+Produce a polished, scannable **Markdown** pre-flight report from the analysis data below.
+Optimise for at-a-glance clarity: a reader should grasp the verdict, the top risks, and the
+money in ten seconds. Be precise — cite the exact record counts and dollar figures given.
 
+DATA
 Dataset: {dataset_path}
-Target Model: {target_model}
+Target model: {target_model}
 Recommendation: {recommendation}
-Quality Score: {quality_score}/100
-Cost before fixes: ${cost_before:,.0f}
-Cost after fixes: ${cost_after:,.0f}
-Savings: ${savings:,.0f}
-
+Quality score: {quality_score}/100
+Cost before fixes: ${cost_before:,.2f}
+Cost after fixes: ${cost_after:,.2f}
+Savings: ${savings:,.2f}
 Findings ({len(findings)} total):
-{json.dumps([{'severity': f['severity'], 'title': f['title'], 'action': f['action']} for f in findings[:6]], indent=2)}
+{findings_payload}
 
-Write the summary in this format:
-1. One-line recommendation with emoji
-2. Top 3 issues with severity and record counts
-3. Cost impact (before → after → savings)
-4. Next steps (auto-fixable vs. needs approval)
+OUTPUT — use exactly this Markdown structure and nothing else (no preamble, no sign-off):
 
-Do not add any preamble or sign-off. Output plain text only."""
+# 📊 DART Pre-Flight Report
+
+> **{recommendation}** — Quality Score **{quality_score}/100**
+> `{dataset_path}` → `{target_model}`
+
+## ⚡ At a Glance
+A one-line verdict sentence, then a compact Markdown table with columns:
+`Severity | Finding | Records | Auto-fix?` — one row per finding, ordered
+critical → high → medium → low. Use 🔴 critical, 🟠 high, 🟡 medium, ⚪ low in the Severity cell.
+
+## 💰 Cost Impact
+A Markdown table: `| Metric | Before | After | Savings |` with a Training Cost row
+(use the dollar figures above) and a Records row if record counts are available.
+
+## 🔧 Recommended Actions
+Two short bulleted groups:
+- **Auto-fixable now** — the findings marked auto_fixable, each one line.
+- **Needs your decision** — the rest, each one line.
+
+## 🔒 Compliance & Audit
+One or two lines: whether PII scanning completed and what it found, and that every
+run is written to an immutable audit trail (EU AI Act Article 10).
+IMPORTANT: if the PII finding indicates the scan did NOT complete, say clearly
+"PII scan did not complete — do not treat this dataset as PII-clean," rather than
+implying no PII exists.
+
+Keep it tight. Prefer tables and short bullets over paragraphs."""
 
     try:
         response = bedrock.invoke_model(

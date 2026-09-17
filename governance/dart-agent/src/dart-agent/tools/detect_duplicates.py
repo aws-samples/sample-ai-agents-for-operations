@@ -20,8 +20,10 @@ from typing import Any
 import polars as pl
 from datasketch import MinHash, MinHashLSH
 
+import shutil
+
 from config import Config
-from tools._validation import validate_dataset_path
+from tools._validation import resolve_to_local_file
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,9 @@ def detect_duplicates(
         duplicate_rate, wasted_token_estimate, duration_ms
     """
     start_ts = time.time()
-    dataset_path = validate_dataset_path(dataset_path)  # threat T-1
+    # Resolve S3 or local input to a readable local file (threat T-1). This is
+    # what lets detect_duplicates run on an s3:// dataset, not just a local one.
+    local_path, is_tmp = resolve_to_local_file(dataset_path)
     threshold = similarity_threshold or Config.DEDUP_SIMILARITY_THRESHOLD
     num_perm = Config.MINHASH_NUM_PERM
 
@@ -101,7 +105,12 @@ def detect_duplicates(
         "num_perm": num_perm,
     }))
 
-    df = _load_dataframe(dataset_path)
+    try:
+        df = _load_dataframe(str(local_path))
+    finally:
+        # The dataset is now in memory; remove any temp download immediately.
+        if is_tmp:
+            shutil.rmtree(local_path.parent, ignore_errors=True)
     total = len(df)
 
     # Determine text columns

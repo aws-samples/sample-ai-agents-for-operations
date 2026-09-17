@@ -100,25 +100,20 @@ class TestToolChainIntegration:
         mock_comprehend = MagicMock()
         mock_boto3_client.return_value = mock_comprehend
 
-        # scan_pii calls BatchDetectPiiEntities(TextList=...); flag any document
-        # containing the sample email as EMAIL PII, clean otherwise. Results
-        # carry their batch position via the 'Index' field.
-        def batch_side_effect(TextList, LanguageCode="en", **kwargs):
-            result_list = []
-            for i, doc in enumerate(TextList):
-                if "test@example.com" in doc:
-                    result_list.append({
-                        "Index": i,
-                        "Entities": [{"BeginOffset": 12, "EndOffset": 28, "Type": "EMAIL"}],
-                    })
-            return {"ResultList": result_list, "ErrorList": []}
+        # scan_pii calls DetectPiiEntities(Text=...) per document (Comprehend has
+        # no batch PII API); flag the sample email as EMAIL PII, clean otherwise.
+        def detect_side_effect(Text, LanguageCode="en", **kwargs):
+            if "test@example.com" in Text:
+                return {"Entities": [{"BeginOffset": 12, "EndOffset": 28, "Type": "EMAIL"}]}
+            return {"Entities": []}
 
-        mock_comprehend.batch_detect_pii_entities.side_effect = batch_side_effect
+        mock_comprehend.detect_pii_entities.side_effect = detect_side_effect
 
         from tools.scan_pii import scan_pii
         result = scan_pii(sample_dataset)
         assert result["pii_found"] is True
         assert result["affected_record_count"] >= 1
+        assert result["scan_complete"] is True
 
     def test_full_report_synthesis(self, sample_dataset, tmp_path):
         """generate_preflight_report should synthesise findings from all tools."""
