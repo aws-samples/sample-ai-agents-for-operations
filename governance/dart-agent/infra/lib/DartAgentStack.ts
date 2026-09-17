@@ -35,6 +35,32 @@ export class DartAgentStack extends cdk.Stack {
     });
     encryptionKey.addAlias(`alias/dart-agent-${environment}`);
 
+    // Allow CloudWatch Logs to use the KMS key for the encrypted log group.
+    // Without this grant, creating a KMS-encrypted log group fails with
+    // "KMS key ... is not allowed to be used with Arn .../log-group:...".
+    encryptionKey.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: "AllowCloudWatchLogs",
+        effect: iam.Effect.ALLOW,
+        principals: [
+          new iam.ServicePrincipal(`logs.${this.region}.amazonaws.com`),
+        ],
+        actions: [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*",
+        ],
+        resources: ["*"],
+        conditions: {
+          ArnLike: {
+            "kms:EncryptionContext:aws:logs:arn": `arn:aws:logs:${this.region}:${this.account}:log-group:*`,
+          },
+        },
+      })
+    );
+
     // ── S3 output bucket ─────────────────────────────────────────────────────
     const outputBucket = new s3.Bucket(this, "DartOutputBucket", {
       bucketName: `dart-agent-output-${this.account}-${this.region}`,
@@ -62,7 +88,7 @@ export class DartAgentStack extends cdk.Stack {
       tableName: `dart-agent-audit-trail-${environment}`,
       partitionKey: { name: "run_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "timestamp", type: dynamodb.AttributeType.STRING },
-      billing: dynamodb.Billing.onDemand(),
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey,
       pointInTimeRecovery: true,
@@ -122,21 +148,37 @@ export class DartAgentStack extends cdk.Stack {
     const taskRole = new iam.Role(this, "DartTaskRole", {
       roleName: `dart-agent-task-role-${environment}`,
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-      description: "DART Agent ECS task role — read-only on customer data",
+      description: "DART Agent ECS task role - read-only on customer data",
     });
 
     // READ-ONLY: Amazon Bedrock inference for the report narrative.
-    // Grants the default model plus two approved alternatives selectable via MODEL_ID.
+    // Newer models (e.g. Claude Sonnet 4) are not invocable by their bare
+    // foundation-model ID with on-demand throughput — they require a
+    // cross-region inference profile (e.g. us.anthropic.claude-sonnet-4-...).
+    // Invoking a "us." profile requires permission on BOTH the inference-profile
+    // resource AND the underlying foundation-model in every region the profile
+    // can route to (us-east-1, us-east-2, us-west-2).
+    const bedrockProfileRegions = ["us-east-1", "us-east-2", "us-west-2"];
+    const bedrockModelIds = [
+      "anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "anthropic.claude-sonnet-4-20250514-v1:0",
+      "anthropic.claude-haiku-4-5",
+      "amazon.nova-pro-v1:0",
+    ];
+    const foundationModelArns = bedrockProfileRegions.flatMap((r) =>
+      bedrockModelIds.map(
+        (m) => `arn:aws:bedrock:${r}::foundation-model/${m}`
+      )
+    );
+    const inferenceProfileArns = bedrockModelIds.map(
+      (m) => `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.${m}`
+    );
     taskRole.addToPolicy(
       new iam.PolicyStatement({
         sid: "BedrockInvokeApprovedModels",
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        resources: [
-          `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0`,
-          `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-haiku-4-5`,
-          `arn:aws:bedrock:${this.region}::foundation-model/amazon.nova-pro-v1:0`,
-        ],
+        resources: [...foundationModelArns, ...inferenceProfileArns],
       })
     );
 
@@ -189,10 +231,15 @@ export class DartAgentStack extends cdk.Stack {
       }
     );
 
-    // Docker image built from local Dockerfile
+    // Docker image built from local Dockerfile.
+    // Pin the build platform to linux/amd64 so the image always matches the
+    // X86_64 task definition below, even when built on an arm64 machine
+    // (e.g. Apple Silicon). Without this, the task fails at startup with
+    // "exec format error".
     const image = new ecr_assets.DockerImageAsset(this, "DartImage", {
       directory: path.join(__dirname, "../.."),
       file: "Dockerfile",
+      platform: ecr_assets.Platform.LINUX_AMD64,
       buildArgs: {
         ENVIRONMENT: environment,
       },
@@ -212,7 +259,7 @@ export class DartAgentStack extends cdk.Stack {
         AUDIT_TABLE: auditTable.tableName,
         LOG_LEVEL: environment === "prod" ? "INFO" : "DEBUG",
         ENVIRONMENT: environment,
-        MODEL_ID: "anthropic.claude-sonnet-4-20250514-v1:0",
+        MODEL_ID: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         MAX_TOKENS: "4096",
         DEFAULT_MODE: "step-by-step",
         DEDUP_SIMILARITY_THRESHOLD: "0.85",

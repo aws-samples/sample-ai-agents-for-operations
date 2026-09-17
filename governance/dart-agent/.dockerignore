@@ -1,0 +1,46 @@
+# Exclude everything not needed in the Docker build context.
+# The Dockerfile only needs requirements.txt and src/dart-agent/.
+# Without this, the CDK DockerImageAsset bundles the entire repo (including
+# infra/cdk.out and .git), causing a recursive-copy explosion (ENAMETOOLONG).
+
+# CDK / infra build output
+infra/
+cdk.out/
+**/cdk.out/
+
+# Version control
+.git/
+.gitignore
+.gitlab-ci.yml
+.gitleaks.toml
+
+# Python virtual envs and caches
+.venv/
+.venv-test/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage_html/
+.coverage
+
+# Node
+**/node_modules/
+
+# Tests (not needed at runtime)
+tests/
+
+# Local tooling / editor / OS
+.kiro/
+.DS_Store
+*.log
+
+# Scan artifacts and reports (internal, must never enter an image)
+*Slingshot-report.csv
+ProbeScanExport-*.csv
+
+# Docs and misc
+*.md
+.threatmodel/
+scripts/
