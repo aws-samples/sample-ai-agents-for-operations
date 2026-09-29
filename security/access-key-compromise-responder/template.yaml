@@ -1,0 +1,463 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AKC Responder - Access Key Compromise Response pipeline (Path A).
+  Event-driven, read-only + advisory. Captures AWS Health / Security Hub
+  (GuardDuty) / Trusted Advisor signals and invokes the AWS DevOps Agent (via
+  its Agent Space webhook) to investigate using the
+  access-key-compromise-investigation skill, then sends a heads-up
+  notification. Findings and human-run recommendations are reviewed in the
+  DevOps Agent operator app. NO resource is mutated automatically.
+
+  This is a SAM template. The three Lambda functions reference their real
+  source under pipeline/lambda/*, so `sam build && sam deploy --guided`
+  packages and deploys everything in one step (no manual zipping).
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: AKCResponder
+    Description: >-
+      Prefix for all physical resource names. Leave as the default for a normal
+      deployment. Change it (e.g. AKCResponder-test) to run an isolated second
+      stack in the same account/Region without name collisions.
+    AllowedPattern: '[A-Za-z0-9-]+'
+
+  NotificationEmail:
+    Type: String
+    Description: Email subscribed to the default SNS fallback topic
+    AllowedPattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+  DevOpsAgentWebhookUrl:
+    Type: String
+    Description: >
+      AWS DevOps Agent Space webhook URL that starts an investigation.
+      Obtain from the DevOps Agent console (Integrations > Webhook).
+    Default: ''
+
+  WebhookSecret:
+    Type: String
+    Description: HMAC signing secret for the DevOps Agent webhook (stored in Secrets Manager)
+    NoEcho: true
+    Default: ''
+
+  SlackWebhookUrl:
+    Type: String
+    Description: Optional Slack incoming webhook URL for notifications
+    Default: ''
+
+  MsTeamsWebhookUrl:
+    Type: String
+    Description: Optional Microsoft Teams webhook URL for notifications
+    Default: ''
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 256
+    Timeout: 60
+
+Resources:
+
+  # ==========================================================
+  # Customer-managed KMS key
+  # Encrypts the two Secrets Manager secrets (webhook HMAC secret + channel
+  # URLs) and the Lambda dead-letter queue. Gives us key control and rotation.
+  # ==========================================================
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for AKCResponder secrets and dead-letter queue
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableRootAccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowServiceUse
+            Effect: Allow
+            Principal:
+              Service:
+                - secretsmanager.amazonaws.com
+                - sqs.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${NamePrefix}'
+      TargetKeyId: !Ref EncryptionKey
+
+  # ==========================================================
+  # Notifications: default SNS topic + email subscription
+  # ==========================================================
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${NamePrefix}-Alerts'
+      KmsMasterKeyId: alias/aws/sns
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # ==========================================================
+  # Dead-letter queue for the Lambda functions
+  # Captures failed asynchronous invocations for later inspection/redrive.
+  # ==========================================================
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${NamePrefix}-DLQ'
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: !Ref EncryptionKey
+
+  # ==========================================================
+  # Secrets: webhook HMAC secret + notification channel URLs
+  # ==========================================================
+  WebhookSecretStore:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}-WebhookSecret'
+      SecretString: !Ref WebhookSecret
+      KmsKeyId: !Ref EncryptionKey
+
+  ChannelsSecretStore:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}-Channels'
+      KmsKeyId: !Ref EncryptionKey
+      SecretString: !Sub |
+        {
+          "slackWebhookUrl": "${SlackWebhookUrl}",
+          "msTeamsWebhookUrl": "${MsTeamsWebhookUrl}"
+        }
+
+  # ==========================================================
+  # Lambda functions (real code packaged from pipeline/lambda/*)
+  # ==========================================================
+  EventRouterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-EventRouter'
+      CodeUri: pipeline/lambda/event_router/
+      Handler: index.lambda_handler
+      Timeout: 120
+      ReservedConcurrentExecutions: 5
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      KmsKeyArn: !GetAtt EncryptionKey.Arn
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref InvestigationStateMachine
+      Policies:
+        - Statement:
+            - Sid: StartWorkflow
+              Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref InvestigationStateMachine
+            - Sid: ReadAccountContext
+              Effect: Allow
+              Action:
+                - account:GetAlternateContact
+                - organizations:DescribeAccount
+                - organizations:ListTagsForResource
+              Resource: '*'
+            - Sid: SendToDLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+            - Sid: UseEncryptionKey
+              Effect: Allow
+              Action:
+                - kms:Decrypt
+                - kms:GenerateDataKey
+              Resource: !GetAtt EncryptionKey.Arn
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: >-
+              This function only calls AWS APIs (Step Functions, Account,
+              Organizations) and does not access any VPC resource. Deploying it
+              in a VPC would add NAT/networking cost and complexity with no
+              security benefit for this advisory, read-only pipeline.
+          - id: W11
+            reason: >-
+              account:GetAlternateContact, organizations:DescribeAccount, and
+              organizations:ListTagsForResource do not support resource-level
+              permissions, so Resource '*' is required by IAM for these actions.
+      checkov:
+        skip:
+          - id: CKV_AWS_117
+            comment: >-
+              Function only calls AWS service endpoints and needs no VPC
+              resources; a VPC would add NAT cost with no security benefit.
+
+  CallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-Callback'
+      CodeUri: pipeline/lambda/investigation_callback/
+      Handler: index.lambda_handler
+      ReservedConcurrentExecutions: 5
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      KmsKeyArn: !GetAtt EncryptionKey.Arn
+      Environment:
+        Variables:
+          DEVOPS_AGENT_WEBHOOK_URL: !Ref DevOpsAgentWebhookUrl
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecretStore
+      Policies:
+        - Statement:
+            - Sid: ReadWebhookSecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref WebhookSecretStore
+            - Sid: SendToDLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+            - Sid: UseEncryptionKey
+              Effect: Allow
+              Action:
+                - kms:Decrypt
+                - kms:GenerateDataKey
+              Resource: !GetAtt EncryptionKey.Arn
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: >-
+              This function calls AWS APIs (Secrets Manager) and an external
+              HTTPS webhook (the DevOps Agent Space endpoint). Placing it in a
+              VPC would require a NAT gateway for outbound webhook egress,
+              adding cost with no security benefit for this advisory pipeline.
+      checkov:
+        skip:
+          - id: CKV_AWS_117
+            comment: >-
+              Function needs outbound HTTPS to the DevOps Agent webhook; a VPC
+              would require a NAT gateway with no security benefit here.
+
+  NotifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-Notifier'
+      CodeUri: pipeline/lambda/notifier/
+      Handler: index.lambda_handler
+      ReservedConcurrentExecutions: 5
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      KmsKeyArn: !GetAtt EncryptionKey.Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref AlertsTopic
+          CHANNELS_SECRET_ARN: !Ref ChannelsSecretStore
+      Policies:
+        - Statement:
+            - Sid: PublishSNS
+              Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref AlertsTopic
+            - Sid: ReadChannels
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref ChannelsSecretStore
+            - Sid: SendToDLQ
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DeadLetterQueue.Arn
+            - Sid: UseEncryptionKey
+              Effect: Allow
+              Action:
+                - kms:Decrypt
+                - kms:GenerateDataKey
+              Resource: !GetAtt EncryptionKey.Arn
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: >-
+              This function calls AWS APIs (SNS, Secrets Manager) and optional
+              external HTTPS chat webhooks (Slack/Teams). Placing it in a VPC
+              would require a NAT gateway for outbound egress, adding cost with
+              no security benefit for this advisory pipeline.
+      checkov:
+        skip:
+          - id: CKV_AWS_117
+            comment: >-
+              Function needs outbound egress to SNS and optional chat webhooks;
+              a VPC would require a NAT gateway with no security benefit here.
+
+  # ==========================================================
+  # Step Functions workflow
+  # invoke agent -> heads-up notify -> end
+  # ==========================================================
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: states.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StateMachinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeLambdas
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt CallbackFunction.Arn
+                  - !GetAtt NotifierFunction.Arn
+
+  InvestigationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${NamePrefix}-Investigation'
+      RoleArn: !GetAtt StateMachineRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Access key compromise: trigger AWS DevOps Agent investigation + heads-up notification (Path A). Findings are reviewed in the DevOps Agent operator app.",
+          "StartAt": "InvokeAgent",
+          "States": {
+            "InvokeAgent": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${CallbackFunction.Arn}",
+                "Payload": {
+                  "action": "invoke",
+                  "incident.$": "$.incident"
+                }
+              },
+              "ResultPath": "$.invocation",
+              "Next": "HeadsUpNotify"
+            },
+            "HeadsUpNotify": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${NotifierFunction.Arn}",
+                "Payload": {
+                  "mode": "triggered",
+                  "incident.$": "$.incident",
+                  "invocation.$": "$.invocation.Payload"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+
+  # ==========================================================
+  # EventBridge rules (3 sources) -> Event Router Lambda
+  # ==========================================================
+  HealthRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${NamePrefix}-AWSHealth'
+      Description: AWS Health AWS_RISK_CREDENTIALS_EXPOSED
+      State: ENABLED
+      EventPattern:
+        source: [aws.health]
+        detail-type: ['AWS Health Event']
+        detail:
+          service: [RISK]
+          eventTypeCode: [AWS_RISK_CREDENTIALS_EXPOSED]
+      Targets:
+        - Id: EventRouter
+          Arn: !GetAtt EventRouterFunction.Arn
+
+  SecurityHubRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${NamePrefix}-SecurityHub'
+      Description: Security Hub GuardDuty IAM access key findings
+      State: ENABLED
+      EventPattern:
+        source: [aws.securityhub]
+        detail-type: ['Security Hub Findings - Imported']
+        detail:
+          findings:
+            Resources:
+              Type: [AwsIamAccessKey]
+            RecordState: [ACTIVE]
+            Workflow:
+              Status: [NEW]
+      Targets:
+        - Id: EventRouter
+          Arn: !GetAtt EventRouterFunction.Arn
+
+  TrustedAdvisorRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${NamePrefix}-TrustedAdvisor'
+      Description: Trusted Advisor Exposed Access Keys check
+      State: ENABLED
+      EventPattern:
+        source: [aws.trustedadvisor]
+        detail-type: ['Trusted Advisor Check Item Refresh Notification']
+        detail:
+          check-name: ['Exposed Access Keys']
+          status: [ERROR, WARN]
+      Targets:
+        - Id: EventRouter
+          Arn: !GetAtt EventRouterFunction.Arn
+
+  HealthRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EventRouterFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt HealthRule.Arn
+
+  SecurityHubRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EventRouterFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SecurityHubRule.Arn
+
+  TrustedAdvisorRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EventRouterFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TrustedAdvisorRule.Arn
+
+Outputs:
+  StateMachineArn:
+    Description: Investigation workflow ARN
+    Value: !Ref InvestigationStateMachine
+  EventRouterFunctionName:
+    Description: Invoke this directly with events/ samples to test the pipeline
+    Value: !Ref EventRouterFunction
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
+  NextSteps:
+    Value: !Sub >
+      1) Confirm the SNS email subscription sent to ${NotificationEmail}.
+      2) Upload the skill to your DevOps Agent Space and set DevOpsAgentWebhookUrl.
+      3) Test by invoking ${EventRouterFunction} with events/test-*.json.

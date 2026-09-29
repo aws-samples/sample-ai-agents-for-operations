@@ -1,0 +1,35 @@
+{
+  "version": "0",
+  "id": "test-health-0001",
+  "detail-type": "AWS Health Event",
+  "source": "aws.health",
+  "account": "111122223333",
+  "time": "2026-09-04T06:30:00Z",
+  "region": "us-east-1",
+  "resources": ["AKIA-EXAMPLE-LEAKED-KEY"],
+  "detail": {
+    "eventArn": "arn:aws:health:us-east-1::event/RISK/AWS_RISK_CREDENTIALS_EXPOSED/test-0001",
+    "service": "RISK",
+    "eventTypeCode": "AWS_RISK_CREDENTIALS_EXPOSED",
+    "eventTypeCategory": "issue",
+    "eventScopeCode": "ACCOUNT_SPECIFIC",
+    "startTime": "Fri, 04 Sep 2026 06:29:00 GMT",
+    "statusCode": "open",
+    "eventRegion": "us-east-1",
+    "eventDescription": [
+      {
+        "language": "en_US",
+        "latestDescription": "Your AWS Account may be compromised. The access key AKIA-EXAMPLE-LEAKED-KEY for user demo-service-user was found exposed on a public repository."
+      }
+    ],
+    "eventMetadata": {
+      "accountId": "111122223333",
+      "publicKey": "AKIA-EXAMPLE-LEAKED-KEY",
+      "userName": "demo-service-user",
+      "exposedUrl": "https://github.com/example/leaked-repo"
+    },
+    "affectedEntities": [
+      {"entityValue": "AKIA-EXAMPLE-LEAKED-KEY"}
+    ]
+  }
+}
