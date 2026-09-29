@@ -1,0 +1,19 @@
+{
+  "version": "0",
+  "id": "test-trustedadvisor-0001",
+  "detail-type": "Trusted Advisor Check Item Refresh Notification",
+  "source": "aws.trustedadvisor",
+  "account": "111122223333",
+  "time": "2026-09-04T06:40:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "check-name": "Exposed Access Keys",
+    "status": "ERROR",
+    "check-item-detail": {
+      "Access Key ID": "AKIA-EXAMPLE-LEAKED-KEY",
+      "IAM User": "demo-service-user",
+      "Exposed Location": "https://github.com/example/leaked-repo",
+      "Case ID": "case-example-0001"
+    }
+  }
+}

@@ -17,7 +17,7 @@ Each agent is a self-contained, deployable solution that follows a common patter
 | **Cloud Governance** | [DART Agent](governance/dart-agent/) | Pre-flight check for LLM fine-tuning datasets — profiles schema, detects duplicates, scans for PII, projects training cost, and returns a GO / NO-GO / GO WITH FIXES verdict with an auditable trail | Available |
 | **Cost Optimization** | _Coming soon_ | Identifies misconfigured architectures and underutilized resources, suggests optimization plans | Planned |
 | **Resiliency** | _Coming soon_ | Monitors resilience posture, recommends failover actions, validates recovery procedures | Planned |
-| **Security** | _Coming soon_ | Automated security posture assessment, compliance drift detection, remediation guidance | Planned |
+| **Security** | [AKC Responder](security/access-key-compromise-responder/) | Event-driven, advisory investigation of compromised or exposed AWS access keys — invokes the AWS DevOps Agent to analyze CloudTrail activity and produce human-run containment recommendations (never mutates resources) | Available |
 
 ## Repository Structure
 
@@ -32,7 +32,8 @@ sample-ai-agents-for-operations/
 │   └── dart-agent/                      # Fine-tuning dataset audit + GO/NO-GO verdict
 ├── cost-optimization/               # Cost & efficiency domain (planned)
 ├── resiliency/                      # Resilience & recovery domain (planned)
-├── security/                        # Security posture domain (planned)
+├── security/                        # Security posture domain
+│   └── access-key-compromise-responder/ # Access-key compromise investigation + recommendations
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 └── LICENSE

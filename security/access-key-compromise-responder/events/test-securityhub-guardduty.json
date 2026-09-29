@@ -1,0 +1,37 @@
+{
+  "version": "0",
+  "id": "test-securityhub-0001",
+  "detail-type": "Security Hub Findings - Imported",
+  "source": "aws.securityhub",
+  "account": "111122223333",
+  "time": "2026-09-04T06:35:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "findings": [
+      {
+        "SchemaVersion": "2018-10-08",
+        "Id": "arn:aws:securityhub:us-east-1:111122223333:finding/test-0001",
+        "AwsAccountId": "111122223333",
+        "Region": "us-east-1",
+        "CreatedAt": "2026-09-04T06:34:30Z",
+        "Types": ["TTPs/CredentialAccess:IAMUser-CompromisedCredentials"],
+        "Title": "CredentialAccess:IAMUser/CompromisedCredentials",
+        "Severity": {"Label": "HIGH"},
+        "RecordState": "ACTIVE",
+        "Workflow": {"Status": "NEW"},
+        "Resources": [
+          {
+            "Type": "AwsIamAccessKey",
+            "Id": "arn:aws:iam::111122223333:user/demo-service-user/AKIA-EXAMPLE-LEAKED-KEY",
+            "Details": {
+              "AwsIamAccessKey": {
+                "UserName": "demo-service-user",
+                "Status": "Active"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
