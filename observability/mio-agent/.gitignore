@@ -161,6 +161,9 @@ site/
 # Kiro spec files (internal development only)
 .kiro/
 
+# Threat model — internal pre-publication review artifact, never publish
+.threatmodel/
+
 # Coverage reports
 htmlcov/
 .coverage
